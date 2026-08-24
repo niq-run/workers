@@ -1,0 +1,46 @@
+{
+  "name": "@niq-ai/workers",
+  "version": "0.1.0",
+  "description": "A collection of niq Workers — interesting, useful workers that live outside the core niq runtime. Each worker is importable as a subpath (e.g. @niq-ai/workers/feishu).",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niq-run/workers.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./feishu": {
+      "types": "./dist/feishu/index.d.ts",
+      "import": "./dist/feishu/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@niq-ai/worker-sdk": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  }
+}

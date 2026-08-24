@@ -1,0 +1,13 @@
+{
+  "name": "workers",
+  "private": true,
+  "workspaces": [
+    "ts/sdk",
+    "ts/workers"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  }
+}
