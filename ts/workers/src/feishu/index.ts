@@ -15,7 +15,7 @@ import {
   createEvent,
   type Event,
   type HTTPWorkerClientOptions,
-} from "@niq-ai/worker-sdk";
+} from "@niq.run/worker-sdk";
 
 /** Delivers one message payload to Feishu. Return the outbound message id. */
 export type FeishuSender = (payload: Record<string, unknown>) => Promise<string>;

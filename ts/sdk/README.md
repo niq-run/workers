@@ -1,4 +1,4 @@
-# @niq-ai/worker-sdk
+# @niq.run/worker-sdk
 
 TypeScript SDK for authoring **niq Workers** that connect to a niq event bus
 over HTTP (SSE + POST).
@@ -23,7 +23,7 @@ before a worker connects. This SDK only establishes the connection.
 ## Usage
 
 ```ts
-import { HTTPWorkerClient, createEvent, EventType } from "@niq-ai/worker-sdk";
+import { HTTPWorkerClient, createEvent, EventType } from "@niq.run/worker-sdk";
 
 const worker = new HTTPWorkerClient({
   baseURL: "http://localhost:8080",

@@ -1,6 +1,6 @@
 # workers
 
-This repository hosts both the **worker SDK** (`@niq-ai/worker-sdk`) and a
+This repository hosts both the **worker SDK** (`@niq.run/worker-sdk`) and a
 collection of **workers** — interesting and useful workers that don't belong in
 the core niq runtime but are fine to ship on their own.
 
@@ -21,13 +21,13 @@ Organized by language:
 ```
 workers/
 ├── ts/                  # TypeScript
-│   ├── sdk/             # @niq-ai/worker-sdk — the TS worker SDK
+│   ├── sdk/             # @niq.run/worker-sdk — the TS worker SDK
 │   └── workers/         # @niq-ai/workers — TS worker collection (subpath exports)
 └── go/                  # Go
     └── workers/         # Go worker directory (skeleton, no concrete workers yet)
 ```
 
-- **TS SDK** (`@niq-ai/worker-sdk`): a convenience layer for connecting to the
+- **TS SDK** (`@niq.run/worker-sdk`): a convenience layer for connecting to the
   bus (HTTP + SSE), maintained independently of the niq core repo.
 - **TS workers** (`@niq-ai/workers`): imported by subpath, e.g.
   `@niq-ai/workers/feishu`.

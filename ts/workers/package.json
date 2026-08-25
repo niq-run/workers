@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@niq-ai/worker-sdk": "*"
+    "@niq.run/worker-sdk": "*"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
