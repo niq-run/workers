@@ -1,7 +1,8 @@
 # workers
 
-A collection of niq Workers — interesting and useful workers that don't belong
-in the core niq runtime but are fine to ship on their own.
+This repository hosts both the **worker SDK** (`@niq-ai/worker-sdk`) and a
+collection of **workers** — interesting and useful workers that don't belong in
+the core niq runtime but are fine to ship on their own.
 
 > **Status: early, moving fast.** Like niq itself, this is early-stage and APIs
 > may change without notice.
@@ -33,6 +34,16 @@ workers/
 - **Go workers** (planned): Go workers will import the core repo module
   `github.com/54c1/niq` directly (e.g. `httptrans.WorkerSide`) to connect to
   the bus — no separate SDK needed. See `go/workers/README.md`.
+
+## Core repository
+
+This repo is complementary to the niq core runtime:
+
+- **niq core** — <https://github.com/niq-run/niq>: the event-driven,
+  decentralized agent runtime (the event bus, the worker swarm, and the
+  in-process workers).
+- **This repo** (`niq-run/workers`): the worker SDK plus out-of-process /
+  standalone workers built on top of it.
 
 ## Install
 
