@@ -13,6 +13,9 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "niq-worker": "./start-worker.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -21,10 +24,15 @@
     "./feishu": {
       "types": "./dist/feishu/index.d.ts",
       "import": "./dist/feishu/index.js"
+    },
+    "./hello": {
+      "types": "./dist/hello/index.d.ts",
+      "import": "./dist/hello/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "start-worker.mjs"
   ],
   "publishConfig": {
     "access": "public"
