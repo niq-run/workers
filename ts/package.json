@@ -2,8 +2,8 @@
   "name": "workers",
   "private": true,
   "workspaces": [
-    "ts/sdk",
-    "ts/workers"
+    "sdk",
+    "workers"
   ],
   "scripts": {
     "build": "npm run build --workspaces",

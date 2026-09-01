@@ -1,4 +1,4 @@
-import type { Event, EventStatus } from "./types.js";
+import type { Event, EventStatus } from "./types/index.js";
 import { newId } from "./id.js";
 
 /**

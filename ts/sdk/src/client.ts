@@ -1,5 +1,5 @@
-import type { Event, WorkerMessage } from "./types.js";
-import type { WorkerSideChannel } from "./channel.js";
+import type { Event, WorkerMessage } from "./types/index.js";
+import type { WorkerSideChannel } from "./types/index.js";
 import { parseEventStream } from "./sse.js";
 
 /** Minimal wire request body sent to `POST /publish`. */

@@ -20,4 +20,8 @@ export const WORKERS: WorkerEntry[] = [
     importPath: "@niq-ai/workers/feishu",
     description: "Bridges events to Feishu (Lark) by sending messages on demand.",
   },
+  {
+    importPath: "@niq-ai/workers/hello",
+    description: "Minimal demo worker: answers hello.greet requests with a greeting.",
+  },
 ];

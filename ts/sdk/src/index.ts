@@ -1,21 +1,25 @@
 export { HTTPWorkerClient } from "./client.js";
 export type { HTTPWorkerClientOptions } from "./client.js";
 
-export type { WorkerSideChannel } from "./channel.js";
+export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
 
 export { createEvent } from "./createEvent.js";
-export { EventType } from "./events.js";
-export type { EventTypeName } from "./events.js";
-
+export { BUS_ENV_VARS, readBusEnv, type BusEnv } from "./env.js";
 export { newId } from "./id.js";
 export { parseEventStream } from "./sse.js";
 
-export type {
-  Event,
-  EventPattern,
-  EventStatus,
-  Identity,
-  MessageType,
-  RequestType,
-  WorkerMessage,
-} from "./types.js";
+export {
+  EventType,
+  type Event,
+  type EventPattern,
+  type EventStatus,
+  type EventTypeName,
+  type Extension,
+  type ExtensionHandler,
+  type Identity,
+  type MessageType,
+  type RequestType,
+  type ToolCall,
+  type WorkerMessage,
+  type WorkerSideChannel,
+} from "./types/index.js";

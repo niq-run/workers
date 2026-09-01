@@ -1,4 +1,4 @@
-import type { Event } from "./types.js";
+import type { Event } from "./event.js";
 
 /**
  * WorkerSideChannel — the worker's view of a connection to the bus.

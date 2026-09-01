@@ -76,6 +76,7 @@ await worker.run();
 | Subpath | Description |
 |---|---|
 | `@niq-ai/workers/feishu` | Bridges events to Feishu (Lark): subscribes to `feishu.send`, publishes the delivery result as `feishu.delivered` / `feishu.failed` |
+| `@niq-ai/workers/hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
 
 ## Add a TS worker
 
@@ -87,14 +88,15 @@ await worker.run();
 ## Development
 
 ```sh
+cd ts             # npm workspace root (SDK + TS workers; go/ is not npm-managed)
 npm install
 npm run typecheck
 npm test        # vitest
 npm run build   # tsc -> dist/
 ```
 
-The root is an npm workspace. The commands above run across both `ts/sdk` and
-`ts/workers`; you can also `cd ts/workers` to run a single package.
+`ts/` is the npm workspace root, covering `ts/sdk` and `ts/workers`; you can
+also `cd ts/workers` to run a single package.
 
 ## License
 

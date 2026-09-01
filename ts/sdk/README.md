@@ -13,7 +13,8 @@ over HTTP (SSE + POST).
 |---|---|
 | Connect to a bus over HTTP (`GET /events` SSE stream) | Identity registration (control-plane / `registryapi`) |
 | `send` (directed) and `broadcast` (subscription-matched) | Worker runtime / swarm assembly |
-| Receive routed events (`tool.requested`, etc.) | Program compilation |
+| Receive routed events (`request.completed`, etc.) | Program compilation |
+| Base worker (`BaseWorker`: extension registry, tool replies, presence announcement) | — |
 | Protocol event type constants | — |
 | Event construction helpers (`createEvent`, correctly timestamped + UUIDv7 ids) | — |
 
@@ -35,12 +36,12 @@ await worker.connect();
 
 // Handle events routed to this worker.
 for await (const evt of worker.events()) {
-  // respond to tool.requested, worker.input, ...
+  // respond to request.completed, worker.input, ...
 }
 
 // Directed delivery — "I know who should handle this."
 await worker.send(
-  createEvent(EventType.ToolCompleted, { result: "ok" }),
+  createEvent(EventType.RequestCompleted, { result: "ok" }),
   "reason.0",
 );
 
@@ -48,6 +49,53 @@ await worker.send(
 await worker.broadcast(createEvent("stats.heartbeat", { uptime: 42 }));
 
 await worker.close();
+```
+
+```ts
+import { HTTPWorkerClient, readBusEnv } from "@niq.run/worker-sdk";
+
+// Launched by the niq supervisor? Connect straight from the environment.
+const client = new HTTPWorkerClient(readBusEnv());
+```
+
+### Base worker
+
+`BaseWorker` (mirrors Go `pkg/baseworker`) layers the shared worker plumbing
+on top of a `WorkerSideChannel`: an extension registry (what the worker
+responds to and how), tool-request reply plumbing, and the `worker.ready`
+presence announcement.
+
+```ts
+import { BaseWorker, HTTPWorkerClient, parseToolCall, EventType } from "@niq.run/worker-sdk";
+
+const worker = new BaseWorker({
+  id: "echo@me",
+  subscriptions: [{ type: "tool.invoke" }],
+  channel: new HTTPWorkerClient({
+    baseURL: "http://localhost:8080",
+    workerID: "echo@me",
+    credential: "...",
+  }),
+});
+
+// Declare what this worker responds to. Safe at any time — before or after
+// connecting. Same (event, keyField, key) re-registration replaces the handler.
+worker.register(
+  { event: "tool.invoke", keyField: "name", key: "echo", description: "Echo a message" },
+  (evt) => {
+    const call = parseToolCall(evt);
+    worker.replyCompleted(call.callerID, call.callID, call.name, `echo: ${call.args["text"] ?? ""}`, call.traceID);
+  },
+);
+
+await worker.channel.connect();
+await worker.announceReady("echo"); // broadcast worker.ready, self excluded
+
+for await (const evt of worker.channel.events()) {
+  if (!worker.dispatchExtension(evt)) {
+    // no handler matched — e.g. replyUnknownTool(parseToolCall(evt))
+  }
+}
 ```
 
 ## Protocol notes
@@ -60,6 +108,10 @@ await worker.close();
 - **Do not set `worker_id` yourself** — the bus overwrites it on receipt
   (anti-spoofing, design D8). The client stamps it at publish time.
 - `send` requires at least one target; use `broadcast` for undirected delivery.
+- **Environment bootstrap**: when the niq project supervisor launches an
+  external worker, it injects `NIQ_BUS_URL`, `NIQ_WORKER_ID` and
+  `NIQ_WORKER_CREDENTIAL`. Use `readBusEnv()` to read them (throws, naming the
+  missing variables, when absent) and construct the client from the result:
 - If no one subscribes, a broadcast silently disappears — that is a valid end
   of the execution path, not an error.
 

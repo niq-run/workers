@@ -1,4 +1,4 @@
-import type { Event } from "./types.js";
+import type { Event } from "./types/index.js";
 
 /**
  * Parse a Node ReadableStream of SSE bytes into Event objects, one per
