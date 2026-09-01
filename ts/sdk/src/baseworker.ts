@@ -130,7 +130,6 @@ export class BaseWorker {
   async replyCompleted(
     callerID: string,
     callID: string,
-    name: string,
     result: string,
     traceID?: string,
   ): Promise<void> {
@@ -138,7 +137,7 @@ export class BaseWorker {
       EventType.RequestCompleted,
       callerID,
       callID,
-      { name, result },
+      { result },
       traceID,
     );
   }
@@ -147,7 +146,6 @@ export class BaseWorker {
   async replyFailed(
     callerID: string,
     callID: string,
-    name: string,
     error: string,
     traceID?: string,
   ): Promise<void> {
@@ -155,7 +153,7 @@ export class BaseWorker {
       EventType.RequestFailed,
       callerID,
       callID,
-      { name, error },
+      { error },
       traceID,
     );
   }
@@ -168,7 +166,6 @@ export class BaseWorker {
   async replyRejected(
     callerID: string,
     callID: string,
-    name: string,
     reason: string,
     traceID?: string,
   ): Promise<void> {
@@ -176,7 +173,7 @@ export class BaseWorker {
       EventType.RequestRejected,
       callerID,
       callID,
-      { name, reason },
+      { reason },
       traceID,
     );
   }
@@ -186,7 +183,6 @@ export class BaseWorker {
     await this.replyFailed(
       tc.callerID,
       tc.callID,
-      tc.name,
       "unknown tool: " + tc.name,
       tc.traceID,
     );

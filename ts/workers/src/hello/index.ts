@@ -100,7 +100,6 @@ export class HelloWorker {
     await this.base.replyCompleted(
       evt.worker_id,
       evt.request_id,
-      "greet",
       `hello, ${name}!`,
       evt.trace_id,
     );

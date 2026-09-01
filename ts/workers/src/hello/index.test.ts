@@ -83,7 +83,7 @@ describe("HelloWorker", () => {
 
     const reply = publishes[1].body.events[0];
     expect(reply.request_id).toBe("req-env");
-    expect(reply.payload).toEqual({ name: "greet", result: "hello, env!" });
+    expect(reply.payload).toEqual({ result: "hello, env!" });
     // The worker id comes from the environment too.
     expect(publishes[0].body.worker_id).toBe("hello@me");
   });
@@ -106,7 +106,7 @@ describe("HelloWorker", () => {
     const reply = publishes[1].body.events[0];
     expect(reply.type).toBe("request.completed");
     expect(reply.request_id).toBe("req-1");
-    expect(reply.payload).toEqual({ name: "greet", result: "hello, niq!" });
+    expect(reply.payload).toEqual({ result: "hello, niq!" });
   });
 
   it("falls back to 'world' when the payload has no name", async () => {
@@ -117,7 +117,7 @@ describe("HelloWorker", () => {
     await worker.close();
 
     const reply = publishes[1].body.events[0];
-    expect(reply.payload).toEqual({ name: "greet", result: "hello, world!" });
+    expect(reply.payload).toEqual({ result: "hello, world!" });
   });
 
   it("does not reply to notifications without a request_id", async () => {

@@ -163,7 +163,7 @@ describe("replies", () => {
   it("replyCompleted sends request.completed echoing the request id", async () => {
     const ch = new FakeChannel();
     const w = makeWorker(ch);
-    await w.replyCompleted("caller.0", "req-7", "echo", "ok", "trace-1");
+    await w.replyCompleted("caller.0", "req-7", "ok", "trace-1");
 
     expect(ch.sent).toHaveLength(1);
     const { evt, targets } = ch.sent[0];
@@ -171,21 +171,21 @@ describe("replies", () => {
     expect(evt.type).toBe(EventType.RequestCompleted);
     expect(evt.request_id).toBe("req-7");
     expect(evt.trace_id).toBe("trace-1");
-    expect(evt.payload).toEqual({ name: "echo", result: "ok" });
+    expect(evt.payload).toEqual({ result: "ok" });
   });
 
   it("replyFailed and replyRejected carry error / reason", async () => {
     const ch = new FakeChannel();
     const w = makeWorker(ch);
-    await w.replyFailed("caller.0", "r", "echo", "boom");
-    await w.replyRejected("caller.0", "r", "echo", "unsafe");
+    await w.replyFailed("caller.0", "r", "boom");
+    await w.replyRejected("caller.0", "r", "unsafe");
 
     expect(ch.sent.map((s) => s.evt.type)).toEqual([
       EventType.RequestFailed,
       EventType.RequestRejected,
     ]);
-    expect(ch.sent[0].evt.payload).toEqual({ name: "echo", error: "boom" });
-    expect(ch.sent[1].evt.payload).toEqual({ name: "echo", reason: "unsafe" });
+    expect(ch.sent[0].evt.payload).toEqual({ error: "boom" });
+    expect(ch.sent[1].evt.payload).toEqual({ reason: "unsafe" });
   });
 
   it("replyUnknownTool answers with a request.failed naming the tool", async () => {
@@ -200,7 +200,7 @@ describe("replies", () => {
     const { evt } = ch.sent[0];
     expect(evt.type).toBe(EventType.RequestFailed);
     expect(evt.request_id).toBe("req-9");
-    expect(evt.payload).toEqual({ name: "nope", error: "unknown tool: nope" });
+    expect(evt.payload).toEqual({ error: "unknown tool: nope" });
   });
 });
 
