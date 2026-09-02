@@ -17,17 +17,43 @@
 //   hello:
 //     --greet-event-type <t>  event type to answer (default: hello.greet)
 //     --default-name <n>      name used when the request carries none (default: world)
+//   lark (Feishu long-connection + bus bridge to a reason worker):
+//     connects to Feishu (LARK_APP_ID / LARK_APP_SECRET) and the bus
+//     (NIQ_BUS_URL / NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL); forwards Feishu
+//     messages as worker.input to the worker named by NIQ_REASON_WORKER.
+//     Proactive reason→lark messages are sent to --default-user /
+//     LARK_DEFAULT_USER_ID (a Feishu open_id) when they carry no chat context.
 
 import { HelloWorker } from "./dist/hello/index.js";
+import { LarkWorker, larkConfigFromEnv } from "./dist/lark/index.js";
+import { HTTPWorkerClient, readBusEnv } from "@niq.run/worker-sdk";
+
+function connOptsFrom(opts) {
+  const busOpts = {};
+  for (const [flag, key] of Object.entries(CONN_KEYS)) {
+    if (opts[flag] !== undefined) busOpts[key] = opts[flag];
+  }
+  return busOpts;
+}
+
+function buildBus(opts) {
+  const overrides = connOptsFrom(opts);
+  if (Object.keys(overrides).length === 0) {
+    return new HTTPWorkerClient(readBusEnv());
+  }
+  return new HTTPWorkerClient({ ...readBusEnv(), ...overrides });
+}
 
 function usage() {
   console.error(
     "usage: node start-worker.mjs <name> [--key value ...]\n" +
-      "  name: hello\n" +
+      "  name: hello | lark\n" +
       "  --bus-url <url>      bus base URL (else NIQ_BUS_URL)\n" +
       "  --worker-id <id>     bus identity (else NIQ_WORKER_ID)\n" +
       "  --credential <cred>  bus credential (else NIQ_WORKER_CREDENTIAL)\n" +
-      "  hello: --greet-event-type <t>, --default-name <n>",
+      "  hello: --greet-event-type <t>, --default-name <n>\n" +
+      "  lark: --app-id <id>, --app-secret <secret> (default: LARK_APP_ID / LARK_APP_SECRET), " +
+      "--default-user <open_id> (default: LARK_DEFAULT_USER_ID), --reason-worker <id> (default: NIQ_REASON_WORKER)",
   );
 }
 
@@ -67,17 +93,42 @@ const { name, opts } = parseArgs(process.argv);
 let worker;
 switch (name) {
   case "hello": {
-    const helloOpts = {};
-    for (const [flag, key] of Object.entries(CONN_KEYS)) {
-      if (opts[flag] !== undefined) helloOpts[key] = opts[flag];
-    }
+    const helloOpts = connOptsFrom(opts);
     if (opts["greet-event-type"] !== undefined) helloOpts.greetEventType = opts["greet-event-type"];
     if (opts["default-name"] !== undefined) helloOpts.defaultName = opts["default-name"];
     worker = new HelloWorker(helloOpts);
     break;
   }
+  case "lark": {
+    // Feishu long-connection + bus bridge to a bound reason worker.
+    // Env-priority: NIQ_BUS_* / NIQ_WORKER_* (supervisor-injected) + LARK_*
+    // / NIQ_REASON_WORKER; CLI flags override for convenience.
+    const bus = buildBus(opts);
+    const reasonWorkerID =
+      opts["reason-worker"] ??
+      process.env.NIQ_REASON_WORKER ??
+      process.env.LARK_REASON_WORKER ??
+      "";
+    if (!reasonWorkerID) {
+      console.error("[start-worker] lark: NIQ_REASON_WORKER must be set (the bound reason worker id)");
+      process.exit(1);
+    }
+    const lark = larkConfigFromEnv();
+    if (opts["app-id"] !== undefined) lark.appId = opts["app-id"];
+    if (opts["app-secret"] !== undefined) lark.appSecret = opts["app-secret"];
+    if (opts["domain"] !== undefined) lark.domain = opts["domain"];
+    const defaultUserOpenId =
+      opts["default-user"] ?? process.env.LARK_DEFAULT_USER_ID ?? "";
+    worker = new LarkWorker({
+      ...lark,
+      bus,
+      reasonWorkerID,
+      ...(defaultUserOpenId ? { defaultUserOpenId } : {}),
+    });
+    break;
+  }
   default:
-    console.error(`[start-worker] unknown worker: ${name} (available: hello)`);
+    console.error(`[start-worker] unknown worker: ${name} (available: hello, lark)`);
     usage();
     process.exit(1);
 }

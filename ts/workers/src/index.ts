@@ -17,11 +17,11 @@ export interface WorkerEntry {
 /** Registry of workers shipped in this package. */
 export const WORKERS: WorkerEntry[] = [
   {
-    importPath: "@niq-ai/workers/feishu",
-    description: "Bridges events to Feishu (Lark) by sending messages on demand.",
-  },
-  {
     importPath: "@niq-ai/workers/hello",
     description: "Minimal demo worker: answers hello.greet requests with a greeting.",
+  },
+  {
+    importPath: "@niq-ai/workers/lark",
+    description: "Feishu WebSocket bridge: relays Feishu messages to a bound reason worker and pushes its replies back.",
   },
 ];

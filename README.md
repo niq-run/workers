@@ -30,7 +30,7 @@ workers/
 - **TS SDK** (`@niq.run/worker-sdk`): a convenience layer for connecting to the
   bus (HTTP + SSE), maintained independently of the niq core repo.
 - **TS workers** (`@niq-ai/workers`): imported by subpath, e.g.
-  `@niq-ai/workers/feishu`.
+  `@niq-ai/workers/lark`.
 - **Go workers** (planned): Go workers will import the core repo module
   `github.com/54c1/niq` directly (e.g. `httptrans.WorkerSide`) to connect to
   the bus — no separate SDK needed. See `go/workers/README.md`.
@@ -53,34 +53,27 @@ npm install @niq-ai/workers
 
 ## Usage
 
-Each TS worker is imported by subpath, e.g. the feishu worker:
+Each TS worker is imported by subpath, e.g. the Lark (Feishu) bridge:
 
 ```ts
-import { FeishuWorker } from "@niq-ai/workers/feishu";
+import { LarkEchoWorker, larkConfigFromEnv } from "@niq-ai/workers/lark";
 
-const worker = new FeishuWorker({
-  baseURL: "http://localhost:8080",
-  workerID: "feishu@me",
-  credential: "the-credential-issued-at-registration",
-  sender: async (payload) => {
-    // Call the Feishu API to send a message, return the message id.
-    return "msg-123";
-  },
-});
+// Reads LARK_APP_ID / LARK_APP_SECRET from the environment.
+const worker = new LarkEchoWorker(larkConfigFromEnv());
 
-await worker.run();
+await worker.run(); // connects to Lark and stays alive until SIGINT
 ```
 
 ## Current workers
 
 | Subpath | Description |
 |---|---|
-| `@niq-ai/workers/feishu` | Bridges events to Feishu (Lark): subscribes to `feishu.send`, publishes the delivery result as `feishu.delivered` / `feishu.failed` |
 | `@niq-ai/workers/hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
+| `@niq-ai/workers/lark` | Feishu long-connection bridge: connects to Lark over WebSocket, forwards inbound messages to a bound reason worker (via `worker.input` + `<system-reminder>`), and pushes the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
 
 ## Add a TS worker
 
-1. Create the worker module under `ts/workers/src/<name>/` (see `ts/workers/src/feishu/`).
+1. Create the worker module under `ts/workers/src/<name>/` (see `ts/workers/src/hello/`).
 2. Add the matching subpath to the `exports` map in `ts/workers/package.json`.
 3. Register an entry in the `WORKERS` registry in `ts/workers/src/index.ts`.
 4. Add tests, then run `npm test` and `npm run typecheck`.

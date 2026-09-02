@@ -69,6 +69,65 @@ describe("publish wire shape", () => {
   });
 });
 
+describe("reconnect on session loss", () => {
+  it("re-establishes the SSE session and retries a publish that hit 'worker not connected'", async () => {
+    let eventsHit = 0;
+    let publishHit = 0;
+    const fetchImpl = (async (url: string) => {
+      if (isEvents(String(url))) {
+        eventsHit++;
+        return new Response(sseStream(["{}"]), { status: 200 });
+      }
+      publishHit++;
+      if (publishHit === 1) {
+        // First publish: the bus has no session for us.
+        return new Response("worker not connected", { status: 400 });
+      }
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new HTTPWorkerClient({
+      baseURL: "http://localhost:8080",
+      workerID: "w1",
+      credential: "secret",
+      fetchImpl,
+    });
+    await client.connect();
+    expect(eventsHit).toBe(1);
+
+    await client.send(
+      { id: "e1", type: "x", status: "created", worker_id: "w1", payload: {}, timestamp: 1 },
+      "target",
+    );
+
+    expect(eventsHit).toBe(2); // reconnect opened /events again
+    expect(publishHit).toBe(2); // original 400 + successful retry
+  });
+
+  it("still throws when the retry also fails with a non-session error", async () => {
+    const fetchImpl = (async (url: string) => {
+      if (isEvents(String(url))) {
+        return new Response(sseStream(["{}"]), { status: 200 });
+      }
+      return new Response("boom", { status: 500 });
+    }) as typeof fetch;
+
+    const client = new HTTPWorkerClient({
+      baseURL: "http://localhost:8080",
+      workerID: "w1",
+      credential: "secret",
+      fetchImpl,
+    });
+    await client.connect();
+    await expect(
+      client.send(
+        { id: "e1", type: "x", status: "created", worker_id: "w1", payload: {}, timestamp: 1 },
+        "target",
+      ),
+    ).rejects.toThrow(/500/);
+  });
+});
+
 describe("SSE parsing", () => {
   it("parses JSON events from the event stream", async () => {
     const fetchImpl = (async () =>

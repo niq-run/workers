@@ -21,6 +21,8 @@ export interface HTTPWorkerClientOptions {
   credential: string;
   /** Injectable fetch (e.g. for tests / proxies). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /** Optional logger for reconnect / network diagnostics (defaults to none). */
+  logger?: Pick<Console, "debug" | "warn">;
 }
 
 /**
@@ -46,11 +48,13 @@ export class HTTPWorkerClient implements WorkerSideChannel {
   private readonly workerID: string;
   private readonly credential: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly logger?: Pick<Console, "debug" | "warn">;
 
   private es?: ReadableStream<Uint8Array>;
   private controller?: AbortController;
   private connected = false;
   private closed = false;
+  private reconnectPromise?: Promise<void>;
 
   constructor(opts: HTTPWorkerClientOptions) {
     this.id = opts.workerID;
@@ -58,12 +62,22 @@ export class HTTPWorkerClient implements WorkerSideChannel {
     this.workerID = opts.workerID;
     this.credential = opts.credential;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.logger = opts.logger;
   }
 
   async connect(): Promise<void> {
     if (this.connected) return;
     if (this.closed) throw new Error("niq: client is closed");
+    const { es, controller } = await this.openSSE();
+    this.es = es;
+    this.controller = controller;
+    this.connected = true;
+  }
 
+  private async openSSE(): Promise<{
+    es: ReadableStream<Uint8Array>;
+    controller: AbortController;
+  }> {
     const url = `${this.baseURL}/events?worker_id=${encodeURIComponent(
       this.workerID,
     )}&credential=${encodeURIComponent(this.credential)}`;
@@ -78,7 +92,38 @@ export class HTTPWorkerClient implements WorkerSideChannel {
     if (!resp.ok || !resp.body) {
       throw new Error(`niq: SSE connect failed with status ${resp.status}`);
     }
-    this.es = resp.body;
+    return { es: resp.body, controller };
+  }
+
+  /**
+   * Re-establish the SSE stream (the client's session anchor on the bus).
+   * Used when the bus no longer has a session for us (publish 400
+   * "worker not connected"), e.g. after the bus restarted or our connection
+   * was silently torn down. Concurrent callers share one in-flight attempt.
+   */
+  private reconnectSSE(): Promise<void> {
+    if (!this.reconnectPromise) {
+      this.reconnectPromise = this.doReconnect()
+        .catch((err) => {
+          this.connected = false;
+          this.logger?.debug?.(`niq: reconnect failed: ${(err as Error).message}`);
+          throw err;
+        })
+        .finally(() => {
+          this.reconnectPromise = undefined;
+        });
+    }
+    return this.reconnectPromise;
+  }
+
+  private async doReconnect(): Promise<void> {
+    this.logger?.debug?.("niq: session lost; reconnecting SSE");
+    // Tear down the current stream so the bus releases the old session.
+    this.controller?.abort();
+    this.connected = false;
+    // Reopen /events (re-registers the session), then resume publishing.
+    const { es, controller } = await this.openSSE();
+    this.es = es;
     this.controller = controller;
     this.connected = true;
   }
@@ -141,9 +186,30 @@ export class HTTPWorkerClient implements WorkerSideChannel {
     } catch (err) {
       throw new Error(`niq: publish failed: ${(err as Error).message}`);
     }
+    if (resp.ok) return;
+
+    const detail = await resp.text().catch(() => "");
+
+    // The bus has no session for us (400 "worker not connected"): the SSE
+    // anchor was silently torn down (bus restart, dropped connection).
+    // Re-establish it and retry this publish once.
+    if (
+      resp.status === 400 &&
+      detail.includes("worker not connected") &&
+      !this.closed
+    ) {
+      await this.reconnectSSE();
+      resp = await this.fetchImpl(`${this.baseURL}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
     if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      throw new Error(`niq: publish failed (${resp.status}): ${detail}`);
+      const retryDetail = await resp.text().catch(() => "");
+      throw new Error(
+        `niq: publish failed (${resp.status}): ${retryDetail}`,
+      );
     }
   }
 }

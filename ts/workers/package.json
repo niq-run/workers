@@ -1,7 +1,7 @@
 {
   "name": "@niq-ai/workers",
   "version": "0.1.0",
-  "description": "A collection of niq Workers — interesting, useful workers that live outside the core niq runtime. Each worker is importable as a subpath (e.g. @niq-ai/workers/feishu).",
+  "description": "A collection of niq Workers — interesting, useful workers that live outside the core niq runtime. Each worker is importable as a subpath (e.g. @niq-ai/workers/lark).",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -21,13 +21,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./feishu": {
-      "types": "./dist/feishu/index.d.ts",
-      "import": "./dist/feishu/index.js"
-    },
     "./hello": {
       "types": "./dist/hello/index.d.ts",
       "import": "./dist/hello/index.js"
+    },
+    "./lark": {
+      "types": "./dist/lark/index.d.ts",
+      "import": "./dist/lark/index.js"
     }
   },
   "files": [
@@ -44,6 +44,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@larksuite/channel": "^0.6.0",
     "@niq.run/worker-sdk": "*"
   },
   "devDependencies": {
