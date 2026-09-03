@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   LarkWorker,
   larkConfigFromEnv,
+  LARK_REASON_SET,
+  LARK_REASON_UNSET,
+  LARK_REASON_GET,
   type LarkChannel,
+  type LarkStateStore,
 } from "./index.js";
 import type { Event, WorkerSideChannel } from "@niq.run/worker-sdk";
 
@@ -89,25 +93,49 @@ function fakeChannel() {
   };
 }
 
+function fakeStateStore(initial: Record<string, unknown> = {}) {
+  let state = { ...initial };
+  const saved: Record<string, unknown>[] = [];
+  const store = {
+    load: vi.fn(async () => ({ ...state })),
+    save: vi.fn(async (s: Record<string, unknown>) => {
+      state = { ...s };
+      saved.push({ ...s });
+    }),
+  };
+  return { store, saved };
+}
+
 function makeWorker(opts: {
   bus: WorkerSideChannel;
   reasonWorkerID?: string;
+  fallbackReasonWorkerID?: string;
+  reasonWorkerMappings?: Record<string, string>;
+  stateStore?: any;
   echo?: boolean;
   defaultUserOpenId?: string;
 }) {
   const { channel, sent, getHandler } = fakeChannel();
+  const { store, saved } = fakeStateStore();
   const worker = new LarkWorker({
     appId: "cli_a",
     appSecret: "secret",
     createChannel: () => channel,
     bus: opts.bus,
     reasonWorkerID: opts.reasonWorkerID ?? "reason.0",
+    ...(opts.fallbackReasonWorkerID !== undefined
+      ? { fallbackReasonWorkerID: opts.fallbackReasonWorkerID }
+      : {}),
+    stateStore: opts.stateStore ?? store,
+    ...(opts.reasonWorkerMappings !== undefined
+      ? { reasonWorkerMappings: opts.reasonWorkerMappings }
+      : {}),
     ...(opts.echo !== undefined ? { echo: opts.echo } : {}),
     ...(opts.defaultUserOpenId !== undefined
       ? { defaultUserOpenId: opts.defaultUserOpenId }
       : {}),
   });
-  return { worker, channel, larkSent: sent, getHandler };
+  return { worker, channel, larkSent: sent, getHandler, stateSaved: saved };
 }
 
 describe("larkConfigFromEnv", () => {
@@ -364,6 +392,210 @@ describe("LarkWorker", () => {
 
     sink.end();
     await running;
+  });
+
+  it("routes a Feishu chat to its configured reason worker, others to default", async () => {
+    const { bus, sent } = fakeBus();
+    const { worker, getHandler } = makeWorker({
+      bus,
+      reasonWorkerMappings: { oc_special: "reason.7" },
+    });
+
+    await worker.connect();
+    await getHandler()({ chatId: "oc_special", messageId: "m1", content: "hi", senderId: "ou_1" });
+    await getHandler()({ chatId: "oc_other", messageId: "m2", content: "yo", senderId: "ou_1" });
+
+    expect(sent[0].targets).toEqual(["reason.7"]);
+    expect(sent[1].targets).toEqual(["reason.0"]);
+  });
+
+  it("updates default routing via lark.reason.set and persists it", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, getHandler, stateSaved } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "r1",
+      type: LARK_REASON_SET,
+      status: "created",
+      payload: {
+        worker_id: "admin.0",
+        arguments: { worker_id: "reason.9" },
+      },
+      worker_id: "admin.0",
+      request_id: "call-set",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    // Mutation acknowledged.
+    const reply = sent[sent.length - 1];
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-set");
+
+    // Forwarding now uses the new default, and it was persisted.
+    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
+    const forwarded = sent.find((s) => s.evt.type === "worker.input");
+    expect(forwarded!.targets).toEqual(["reason.9"]);
+    expect(stateSaved.at(-1)).toEqual({
+      default_reason_worker: "reason.9",
+      fallback_reason_worker: "",
+      per_chat: {},
+    });
+
+    sink.end();
+    await running;
+  });
+
+  it("maps a chat via lark.reason.set, overrides default, unset falls back", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, getHandler, stateSaved } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "r2",
+      type: LARK_REASON_SET,
+      status: "created",
+      payload: { worker_id: "admin.0", arguments: { chat_id: "oc_a", worker_id: "reason.A" } },
+      worker_id: "admin.0",
+      request_id: "call-set",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    await getHandler()({ chatId: "oc_a", messageId: "m1", content: "hi", senderId: "ou_1" });
+    await getHandler()({ chatId: "oc_b", messageId: "m2", content: "yo", senderId: "ou_1" });
+    expect(sent.filter((s) => s.evt.type === "worker.input")[0].targets).toEqual(["reason.A"]);
+    expect(sent.filter((s) => s.evt.type === "worker.input")[1].targets).toEqual(["reason.0"]);
+
+    // Unset the override → back to default.
+    sink.push({
+      id: "r3",
+      type: LARK_REASON_UNSET,
+      status: "created",
+      payload: { worker_id: "admin.0", arguments: { chat_id: "oc_a" } },
+      worker_id: "admin.0",
+      request_id: "call-unset",
+      timestamp: Date.now(),
+    });
+    await flush();
+    await getHandler()({ chatId: "oc_a", messageId: "m3", content: "hi", senderId: "ou_1" });
+    expect(sent.filter((s) => s.evt.type === "worker.input").at(-1)!.targets).toEqual(["reason.0"]);
+    expect(stateSaved.at(-1)).toEqual({ default_reason_worker: "reason.0", fallback_reason_worker: "", per_chat: {} });
+
+    sink.end();
+    await running;
+  });
+
+  it("restores persisted routing state on connect", async () => {
+    const store: LarkStateStore = {
+      load: async () => ({ default_reason_worker: "reason.Z", per_chat: { oc_persisted: "reason.Y" } }),
+      save: async () => {},
+    };
+    const { bus, sent } = fakeBus();
+    const { worker, getHandler } = makeWorker({ bus, stateStore: store });
+
+    await worker.connect();
+    await getHandler()({ chatId: "oc_persisted", messageId: "m1", content: "hi", senderId: "ou_1" });
+    await getHandler()({ chatId: "oc_plain", messageId: "m2", content: "yo", senderId: "ou_1" });
+
+    expect(sent[0].targets).toEqual(["reason.Y"]);
+    expect(sent[1].targets).toEqual(["reason.Z"]);
+  });
+
+  it("lark.reason.get returns the current routing", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus, reasonWorkerMappings: { oc_x: "reason.5" } });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "r4",
+      type: LARK_REASON_GET,
+      status: "created",
+      payload: { worker_id: "admin.0", arguments: {} },
+      worker_id: "admin.0",
+      request_id: "call-get",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent[sent.length - 1];
+    expect(reply.evt.type).toBe("request.completed");
+    expect(JSON.parse(reply.evt.payload.result as string)).toEqual({
+      default_reason_worker: "reason.0",
+      fallback_reason_worker: "",
+      per_chat: { oc_x: "reason.5" },
+    });
+
+    sink.end();
+    await running;
+  });
+
+  it("falls back when there is no per-chat mapping or default", async () => {
+    const { bus, sent } = fakeBus();
+    // Explicitly empty default → routing must fall through to the fallback.
+    const { worker, getHandler } = makeWorker({
+      bus,
+      reasonWorkerID: "",
+      fallbackReasonWorkerID: "reason.FB",
+    });
+
+    await worker.connect();
+    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
+    expect(sent[0].targets).toEqual(["reason.FB"]);
+  });
+
+  it("sets the fallback via lark.reason.set and persists it", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, getHandler, stateSaved } = makeWorker({ bus, reasonWorkerID: "" });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "rf1",
+      type: LARK_REASON_SET,
+      status: "created",
+      payload: { worker_id: "admin.0", arguments: { fallback: true, worker_id: "reason.FB" } },
+      worker_id: "admin.0",
+      request_id: "call-set-fb",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent[sent.length - 1];
+    expect(reply.evt.type).toBe("request.completed");
+    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
+    const forwarded = sent.find((s) => s.evt.type === "worker.input");
+    expect(forwarded!.targets).toEqual(["reason.FB"]);
+    expect(stateSaved.at(-1)).toEqual({
+      default_reason_worker: "",
+      fallback_reason_worker: "reason.FB",
+      per_chat: {},
+    });
+
+    sink.end();
+    await running;
+  });
+
+  it("restores a persisted fallback worker on connect", async () => {
+    const store: LarkStateStore = {
+      load: async () => ({ fallback_reason_worker: "reason.FB", per_chat: {} }),
+      save: async () => {},
+    };
+    const { bus, sent } = fakeBus();
+    // No default from config; the persisted state only carries a fallback → it must be used.
+    const { worker, getHandler } = makeWorker({
+      bus,
+      reasonWorkerID: "",
+      stateStore: store,
+    });
+
+    await worker.connect();
+    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
+    expect(sent[0].targets).toEqual(["reason.FB"]);
   });
 });
 

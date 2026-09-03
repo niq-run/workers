@@ -21,12 +21,22 @@
  * Credentials come from the environment: `LARK_APP_ID` / `LARK_APP_SECRET`
  * (+ `LARK_DOMAIN`), and the bus via `NIQ_BUS_URL` / `NIQ_WORKER_ID` /
  * `NIQ_WORKER_CREDENTIAL` — the niq project supervisor injects these as launch
- * args (project.json env). The bound reason worker id comes from
- * `NIQ_REASON_WORKER`.
+ * args (project.json env). The default reason worker id comes from
+ * `NIQ_REASON_WORKER`; an initial per-chat override map can come from
+ * `LARK_REASON_WORKER_MAPPINGS` (a JSON object of {chat_id: worker_id}).
+ *
+ * Routing (which reason worker a Feishu chat is forwarded to) is a mutable,
+ * persisted property: configured on startup, updated at runtime via the
+ * `lark.reason.*` extension group, and saved to a state file so it survives
+ * restarts. The runtime saves it via an injectable {@link LarkStateStore}.
+ * (Third-party process snapshot/restore is not implemented yet; the worker
+ * persists its own state for now.)
  *
  * Both external sides sit behind narrow interfaces so tests run without real
  * Feishu credentials or a live bus.
  */
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { createLarkChannel } from "@larksuite/channel";
 import type {
   LarkChannelOptions,
@@ -89,6 +99,68 @@ export function withTimestamps<T extends Logger>(base: T): T {
 
 const DEFAULT_LOGGER: Logger = withTimestamps(console);
 
+/** The subset of the `fs/promises` API the file state store uses. Injectable. */
+export interface StateFileFs {
+  mkdir(dir: string, opts: { recursive: boolean }): Promise<string | undefined>;
+  readFile(file: string, enc: "utf8"): Promise<string>;
+  writeFile(file: string, data: string, enc: "utf8"): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+}
+
+/**
+ * Persistence for the reason-routing state. Injected for tests; the default
+ * is {@link FileLarkStateStore}. This is the seam a future snapshot/restore
+ * implementation can plug into without touching the worker's logic.
+ */
+export interface LarkStateStore {
+  load(): Promise<Record<string, unknown>>;
+  save(state: Record<string, unknown>): Promise<void>;
+}
+
+/**
+ * A {@link LarkStateStore} backed by a local JSON file, written atomically
+ * (temp file + rename) so a crash mid-write cannot corrupt the saved state.
+ * A missing file loads as an empty state.
+ */
+export class FileLarkStateStore implements LarkStateStore {
+  private readonly file: string;
+  private readonly fs: StateFileFs;
+
+  constructor(file: string, fsImpl: StateFileFs = { mkdir, readFile, writeFile, rename }) {
+    this.file = file;
+    this.fs = fsImpl;
+  }
+
+  async load(): Promise<Record<string, unknown>> {
+    let raw: string;
+    try {
+      raw = await this.fs.readFile(this.file, "utf8");
+    } catch (err) {
+      // First run: no state file yet — start from config defaults.
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+      throw err;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  }
+
+  async save(state: Record<string, unknown>): Promise<void> {
+    const tmp = `${this.file}.${process.pid}.${Date.now()}.tmp`;
+    await this.fs.mkdir(dirname(this.file), { recursive: true });
+    await this.fs.writeFile(tmp, JSON.stringify(state, null, 2), "utf8");
+    await this.fs.rename(tmp, this.file);
+  }
+}
+
+/** The default state file path when none is configured. */
+export function defaultStateFile(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return env.LARK_STATE_FILE?.trim() || "lark-reason-state.json";
+}
+
 /** Connection settings for the Lark side, read from the environment by default. */
 export interface LarkConfig {
   appId: string;
@@ -136,8 +208,37 @@ with any system notes.
 export interface LarkBridgeOptions extends LarkConfig {
   /** Worker-side bus channel. Injected for tests; built from env otherwise. */
   bus: WorkerSideChannel;
-  /** The reason worker this bridge forwards Feishu messages to. */
-  reasonWorkerID: string;
+  /**
+   * The default reason worker Feishu messages are forwarded to when a chat has
+   * no per-chat override (see {@link LarkBridgeOptions.reasonWorkerMappings}),
+   * unless a persisted state file overrides it. Optional: when unset, routing
+   * falls through to {@link LarkBridgeOptions.fallbackReasonWorkerID}. Config
+   * only seeds this value.
+   */
+  reasonWorkerID?: string;
+  /**
+   * The last-resort reason worker used when neither a per-chat mapping nor the
+   * default resolves. Optional; config only seeds it (mutable at runtime and
+   * persisted like the rest of the routing).
+   */
+  fallbackReasonWorkerID?: string;
+  /**
+   * Initial chat_id → reason worker id routing. Config only seeds the runtime
+   * map; it is updateable at runtime via the `lark.reason.*` extensions and
+   * persisted (see {@link LarkBridgeOptions.stateStore}).
+   */
+  reasonWorkerMappings?: Record<string, string>;
+  /**
+   * Persistence backend for the reason-routing state. Defaults to a local JSON
+   * file at {@link LarkBridgeOptions.stateFile}. Inject for tests to avoid I/O.
+   * This is the seam a future snapshot/restore implementation plugs into.
+   */
+  stateStore?: LarkStateStore;
+  /**
+   * Path for the default file state store (ignored when `stateStore` is given).
+   * Falls back to `LARK_STATE_FILE`, then `./lark-reason-state.json`.
+   */
+  stateFile?: string;
   /**
    * Optional replacement for the default `<system-reminder>` prepended to
    * outbound worker.input text.
@@ -165,6 +266,19 @@ const NS = "lark";
 export const LARK_SEND_EVENT = "lark.send";
 
 /**
+ * The group of extensions lark exposes for managing the chat → reason worker
+ * routing at runtime. All are non-SelfOnly so a control plane / admin peer can
+ * discover and call them. Each mutation also persists the new routing.
+ */
+
+/** Route a Feishu chat (or set the default) to a specific reason worker. */
+export const LARK_REASON_SET = "lark.reason.set";
+/** Stop routing a chat to its own worker; fall back to the default. */
+export const LARK_REASON_UNSET = "lark.reason.unset";
+/** Return the current routing (default + per-chat overrides). */
+export const LARK_REASON_GET = "lark.reason.get";
+
+/**
  * The Feishu ⇄ reason bridge. Connect both sides, then forward Feishu
  * messages to the bound reason worker and push its replies back to Feishu.
  */
@@ -173,7 +287,13 @@ export class LarkWorker {
   private readonly bus: WorkerSideChannel;
   private readonly base: BaseWorker;
   private readonly workerID: string;
-  private readonly reasonWorkerID: string;
+  /** Default reason worker; overridden per-chat by {@link perChat}. Mutable at runtime. */
+  private defaultReasonWorker: string;
+  /** Last-resort worker used when neither per-chat nor default resolves. Mutable at runtime. */
+  private fallbackReasonWorker: string;
+  /** chat_id → reason worker id. Updated by config seed, runtime events, and persisted state. */
+  private readonly perChat = new Map<string, string>();
+  private readonly stateStore: LarkStateStore;
   private readonly systemReminder: string;
   private readonly echo: boolean;
   private readonly defaultUserOpenId: string;
@@ -198,13 +318,26 @@ export class LarkWorker {
     });
     this.bus = opts.bus;
     this.workerID = opts.bus.id;
-    this.reasonWorkerID = opts.reasonWorkerID;
+    // Config seeds the routing state; a persisted state file overrides it on load.
+    this.defaultReasonWorker = opts.reasonWorkerID ?? "";
+    this.fallbackReasonWorker = opts.fallbackReasonWorkerID ?? "";
+    for (const [chat, wid] of Object.entries(opts.reasonWorkerMappings ?? {})) {
+      if (wid) this.perChat.set(chat, wid);
+    }
+    this.stateStore =
+      opts.stateStore ??
+      new FileLarkStateStore(opts.stateFile ?? defaultStateFile());
     this.systemReminder = opts.systemReminder ?? DEFAULT_SYSTEM_REMINDER;
     this.echo = opts.echo ?? false;
     this.defaultUserOpenId = opts.defaultUserOpenId ?? "";
     this.logger = opts.logger ?? DEFAULT_LOGGER;
     this.base = new BaseWorker({
       id: this.workerID,
+      subscriptions: [
+        { type: LARK_REASON_SET },
+        { type: LARK_REASON_UNSET },
+        { type: LARK_REASON_GET },
+      ],
       channel: this.bus,
     });
 
@@ -228,6 +361,67 @@ export class LarkWorker {
         },
       },
       (evt) => this.handleLarkSend(evt),
+    );
+
+    // The lark.reason.* group: manage the chat → reason worker routing at
+    // runtime. Every mutation is persisted so the routing survives restarts.
+    this.base.register(
+      {
+        event: LARK_REASON_SET,
+        description:
+          "Route a Feishu chat to a reason worker, set the default, or set the fallback. " +
+          "Provide worker_id. Include chat_id to route only that chat; include fallback=true " +
+          "(no chat_id) to set the last-resort fallback; otherwise the default reason worker is set.",
+        parameters: {
+          type: "object",
+          properties: {
+            chat_id: {
+              type: "string",
+              description: "Feishu chat_id to route (omit to set the default or fallback)",
+            },
+            worker_id: {
+              type: "string",
+              description: "Reason worker id to route matching messages to",
+            },
+            fallback: {
+              type: "boolean",
+              description: "Set the last-resort fallback reason worker instead of the default (ignored when chat_id is given)",
+            },
+          },
+        },
+      },
+      (evt) => this.handleReasonSet(evt),
+    );
+    this.base.register(
+      {
+        event: LARK_REASON_UNSET,
+        description:
+          "Stop routing a Feishu chat to its own reason worker and fall back to the default, " +
+          "or clear the fallback. Provide chat_id to drop a chat override; include fallback=true " +
+          "(chat_id optional) to clear the fallback.",
+        parameters: {
+          type: "object",
+          properties: {
+            chat_id: {
+              type: "string",
+              description: "Feishu chat_id to stop overriding, falling back to the default",
+            },
+            fallback: {
+              type: "boolean",
+              description: "Clear the fallback reason worker",
+            },
+          },
+        },
+      },
+      (evt) => this.handleReasonUnset(evt),
+    );
+    this.base.register(
+      {
+        event: LARK_REASON_GET,
+        description:
+          "Return the current chat → reason worker routing (default + per-chat overrides).",
+      },
+      (evt) => this.handleReasonGet(evt),
     );
 
     let markReady!: () => void;
@@ -277,9 +471,12 @@ export class LarkWorker {
         throw err;
       }),
     ]);
+    // Restore persisted routing before being ready, so the first Feishu message
+    // already uses the saved chat → reason worker mapping.
+    await this.loadState();
     this.markReady();
     this.logger.info(
-      `[${NS}] connected: bus worker_id=${this.workerID} reason=${this.reasonWorkerID} feishu app=${this.lark.constructor.name}`,
+      `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name}`,
     );
     await this.base.announceReady("lark", [
       { type: "worker.input", description: "Feishu messages forwarded to reason" },
@@ -341,10 +538,72 @@ export class LarkWorker {
       input_mode: "interrupt",
     });
     input.trace_id = traceId;
-    await this.bus.send(input, this.reasonWorkerID);
+    const reasonWorker = this.reasonWorkerFor(msg.chatId);
+    if (!reasonWorker) {
+      this.logger.warn(
+        `[${NS}] drop feishu message chat=${msg.chatId} msg=${msg.messageId}: no reason worker (no per-chat mapping, default, or fallback)`,
+      );
+      return;
+    }
+    await this.bus.send(input, reasonWorker);
     this.logger.info(
-      `[${NS}] sent worker.input trace=${traceId} → reason ${this.reasonWorkerID}`,
+      `[${NS}] sent worker.input trace=${traceId} → reason ${reasonWorker} (chat ${msg.chatId})`,
     );
+  }
+
+  /**
+   * Resolve the reason worker a chat's messages are forwarded to: per-chat
+   * mapping, else the default, else the last-resort fallback. Returns "" when
+   * none is configured.
+   */
+  private reasonWorkerFor(chatId: string): string {
+    const perChat = this.perChat.get(chatId);
+    if (perChat) return perChat;
+    if (this.defaultReasonWorker) return this.defaultReasonWorker;
+    return this.fallbackReasonWorker;
+  }
+
+  /**
+   * Restore persisted routing on top of the config seed. A persisted value wins
+   * over config because it is the most recent state (last write wins).
+   */
+  private async loadState(): Promise<void> {
+    let state: Record<string, unknown>;
+    try {
+      state = await this.stateStore.load();
+    } catch (err) {
+      this.logger.error(`[${NS}] failed to load reason state:`, err);
+      return;
+    }
+    if (typeof state["default_reason_worker"] === "string" && state["default_reason_worker"]) {
+      this.defaultReasonWorker = state["default_reason_worker"] as string;
+    }
+    if (typeof state["fallback_reason_worker"] === "string" && state["fallback_reason_worker"]) {
+      this.fallbackReasonWorker = state["fallback_reason_worker"] as string;
+    }
+    const perChat = state["per_chat"];
+    if (perChat && typeof perChat === "object" && !Array.isArray(perChat)) {
+      this.perChat.clear();
+      for (const [chat, wid] of Object.entries(perChat as Record<string, unknown>)) {
+        if (typeof wid === "string" && wid) this.perChat.set(chat, wid);
+      }
+    }
+    this.logger.info(
+      `[${NS}] loaded reason state: default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
+    );
+  }
+
+  /** Persist the current routing. Best-effort: a failed write is logged, not thrown. */
+  private async persistState(): Promise<void> {
+    try {
+      await this.stateStore.save({
+        default_reason_worker: this.defaultReasonWorker,
+        fallback_reason_worker: this.fallbackReasonWorker,
+        per_chat: Object.fromEntries(this.perChat),
+      });
+    } catch (err) {
+      this.logger.error(`[${NS}] failed to persist reason state:`, err);
+    }
   }
 
   /** Fill the {chat_id} / {sender_open_id} placeholders in the reminder template. */
@@ -441,5 +700,82 @@ export class LarkWorker {
         tc.traceID,
       );
     }
+  }
+
+  /**
+   * Serve the `lark.reason.set` extension: route a chat to a worker (`chat_id`),
+   * set the default (neither `chat_id` nor `fallback`), or set the last-resort
+   * fallback (`fallback: true`). Persists the change so it survives a restart.
+   */
+  private async handleReasonSet(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    const workerId =
+      argString(tc.args, "worker_id") || argString(tc.args, "workerId");
+    const chatId = argString(tc.args, "chat_id") || argString(tc.args, "chatId");
+    const isFallback = tc.args["fallback"] === true;
+
+    if (!workerId) {
+      await this.base.replyFailed(
+        tc.callerID,
+        tc.callID,
+        "worker_id is required",
+        tc.traceID,
+      );
+      return;
+    }
+    if (chatId) {
+      this.perChat.set(chatId, workerId);
+      this.logger.info(`[${NS}] lark.reason.set chat=${chatId} → ${workerId}`);
+    } else if (isFallback) {
+      this.fallbackReasonWorker = workerId;
+      this.logger.info(`[${NS}] lark.reason.set fallback → ${workerId}`);
+    } else {
+      this.defaultReasonWorker = workerId;
+      this.logger.info(`[${NS}] lark.reason.set default → ${workerId}`);
+    }
+    await this.persistState();
+    await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
+  }
+
+  /** Serve the `lark.reason.unset` extension: drop a chat override or clear the fallback. */
+  private async handleReasonUnset(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    const chatId = argString(tc.args, "chat_id") || argString(tc.args, "chatId");
+    const isFallback = tc.args["fallback"] === true;
+
+    if (isFallback) {
+      this.fallbackReasonWorker = "";
+      await this.persistState();
+      await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
+      this.logger.info(`[${NS}] lark.reason.unset fallback cleared`);
+      return;
+    }
+    if (!chatId) {
+      await this.base.replyFailed(
+        tc.callerID,
+        tc.callID,
+        "chat_id is required (or set fallback=true to clear the fallback)",
+        tc.traceID,
+      );
+      return;
+    }
+    this.perChat.delete(chatId);
+    await this.persistState();
+    await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
+    this.logger.info(`[${NS}] lark.reason.unset chat=${chatId} → default ${this.defaultReasonWorker}`);
+  }
+
+  /** Serve the `lark.reason.get` extension: return the current routing as JSON. */
+  private async handleReasonGet(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    const result = JSON.stringify({
+      default_reason_worker: this.defaultReasonWorker,
+      fallback_reason_worker: this.fallbackReasonWorker,
+      per_chat: Object.fromEntries(this.perChat),
+    });
+    await this.base.replyCompleted(tc.callerID, tc.callID, result, tc.traceID);
+    this.logger.info(
+      `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
+    );
   }
 }
