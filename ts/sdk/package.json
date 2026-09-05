@@ -21,7 +21,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish && git add package.json ../package-lock.json && git commit -m \"Bump @niq.run/worker-sdk to $(node -p 'require(\"./package.json\").version')\""
   },
   "engines": {
     "node": ">=18"
