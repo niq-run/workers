@@ -27,8 +27,9 @@
 //     --fallback-reason-worker / LARK_FALLBACK_REASON_WORKER. The chat→worker
 //     routing is persisted (--state-file / LARK_STATE_FILE, default
 //     ./lark-reason-state.json).
-//     Proactive reason→lark messages are sent to --default-user /
-//     LARK_DEFAULT_USER_ID (a Feishu open_id) when they carry no chat context.
+//     Proactive reason→lark messages use lark.send with no target and fall
+//     back to --default-user / LARK_DEFAULT_USER_ID (a Feishu open_id) when
+//     the reason worker supplies no explicit target.
 
 import { HelloWorker } from "./dist/hello/index.js";
 import { LarkWorker, larkConfigFromEnv } from "./dist/lark/index.js";

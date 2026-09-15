@@ -179,8 +179,7 @@ describe("LarkWorker", () => {
     const { evt, targets } = sent[0];
     expect(targets).toEqual(["reason.0"]);
     expect(evt.type).toBe("worker.input");
-    expect(evt.trace_id).toBe("feishu-oc_1-om_1");
-    expect(evt.payload).toMatchObject({ input_mode: "interrupt" });
+    expect(evt.payload).toMatchObject({ input_mode: "append" });
     expect(typeof evt.payload.text).toBe("string");
     expect((evt.payload.text as string).includes("<system-reminder>")).toBe(
       true,
@@ -200,70 +199,13 @@ describe("LarkWorker", () => {
     const ready = broadcasts[0];
     expect(ready.type).toBe("worker.ready");
     expect(ready.payload).toMatchObject({
-      worker_id: "lark@me",
       type: "lark",
     });
     expect(ready.exclude_worker_id).toBe("lark@me");
   });
 
-  it("pushes a reason reply (worker.input) to the matching Feishu chat", async () => {
+  it("delivers a lark.send with no target to the configured default user", async () => {
     const { bus, sink, sent } = fakeBus();
-    const { worker, larkSent, getHandler } = makeWorker({ bus });
-
-    const running = worker.run(); // connects + starts the bus event loop
-    // Wait until connect() has run (both fakes resolve immediately), then feed the Feishu message.
-    await flush();
-
-    await getHandler()({
-      chatId: "oc_9",
-      messageId: "om_9",
-      content: "user msg",
-      senderId: "ou_9",
-    });
-    expect(sent[0].evt.trace_id).toBe("feishu-oc_9-om_9");
-
-    // reason replies with a worker.input on the same trace (via send_message).
-    sink.push({
-      id: "r1",
-      type: "worker.input",
-      status: "created",
-      payload: { text: "hello user!" },
-      worker_id: "reason.0",
-      trace_id: "feishu-oc_9-om_9",
-      timestamp: Date.now(),
-    });
-    await flush();
-
-    expect(larkSent).toEqual([{ to: "oc_9", input: { text: "hello user!" } }]);
-
-    sink.end();
-    await running;
-  });
-
-  it("drops proactive replies with no recipient and no default user", async () => {
-    const { bus, sink } = fakeBus();
-    const { worker, larkSent } = makeWorker({ bus });
-
-    const running = worker.run();
-    await flush();
-    sink.push({
-      id: "r1",
-      type: "worker.input",
-      status: "created",
-      payload: { text: "orphan" },
-      worker_id: "reason.0",
-      trace_id: "unknown-trace",
-      timestamp: Date.now(),
-    });
-    await flush();
-
-    expect(larkSent).toEqual([]);
-    sink.end();
-    await running;
-  });
-
-  it("delivers a proactive reason message to the configured default user", async () => {
-    const { bus, sink } = fakeBus();
     const { worker, larkSent } = makeWorker({
       bus,
       defaultUserOpenId: "ou_default_user",
@@ -273,11 +215,11 @@ describe("LarkWorker", () => {
     await flush();
     sink.push({
       id: "r1",
-      type: "worker.input",
+      type: "lark.send",
       status: "created",
       payload: { text: "scheduled reminder" },
       worker_id: "reason.0",
-      trace_id: "reason-uuid-1",
+      request_id: "call-4",
       timestamp: Date.now(),
     });
     await flush();
@@ -285,31 +227,32 @@ describe("LarkWorker", () => {
     expect(larkSent).toEqual([
       { to: "ou_default_user", input: { text: "scheduled reminder" } },
     ]);
+    expect(sent[sent.length - 1].evt.type).toBe("request.completed");
     sink.end();
     await running;
   });
 
-  it("prefers an explicit payload recipient over the default user", async () => {
-    const { bus, sink } = fakeBus();
-    const { worker, larkSent } = makeWorker({
-      bus,
-      defaultUserOpenId: "ou_default_user",
-    });
+  it("replies request.failed when lark.send has no target and no default user", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, larkSent } = makeWorker({ bus });
 
     const running = worker.run();
     await flush();
     sink.push({
-      id: "r1",
-      type: "worker.input",
+      id: "r2",
+      type: "lark.send",
       status: "created",
-      payload: { text: "msg", open_id: "ou_specific" },
+      payload: { text: "orphan" },
       worker_id: "reason.0",
-      trace_id: "reason-uuid-2",
+      request_id: "call-5",
       timestamp: Date.now(),
     });
     await flush();
 
-    expect(larkSent[0].to).toBe("ou_specific");
+    expect(larkSent).toEqual([]);
+    const reply = sent[sent.length - 1];
+    expect(reply.evt.type).toBe("request.failed");
+    expect(reply.evt.request_id).toBe("call-5");
     sink.end();
     await running;
   });
@@ -340,10 +283,7 @@ describe("LarkWorker", () => {
       id: "e1",
       type: "lark.send",
       status: "created",
-      payload: {
-        worker_id: "reason.0",
-        arguments: { target: "oc_group_1", text: "hi from reason" },
-      },
+    	  payload: { target: "oc_group_1", text: "hi from reason" },
       worker_id: "reason.0",
       request_id: "call-1",
       trace_id: "reason-uuid-3",
@@ -375,10 +315,7 @@ describe("LarkWorker", () => {
       id: "e2",
       type: "lark.send",
       status: "created",
-      payload: {
-        worker_id: "reason.0",
-        arguments: { target: "oc_x", text: "" },
-      },
+    	  payload: { target: "oc_x", text: "" },
       worker_id: "reason.0",
       request_id: "call-2",
       timestamp: Date.now(),
@@ -419,10 +356,7 @@ describe("LarkWorker", () => {
       id: "r1",
       type: LARK_REASON_SET,
       status: "created",
-      payload: {
-        worker_id: "admin.0",
-        arguments: { worker_id: "reason.9" },
-      },
+      payload: { worker_id: "reason.9" },
       worker_id: "admin.0",
       request_id: "call-set",
       timestamp: Date.now(),
@@ -458,7 +392,7 @@ describe("LarkWorker", () => {
       id: "r2",
       type: LARK_REASON_SET,
       status: "created",
-      payload: { worker_id: "admin.0", arguments: { chat_id: "oc_a", worker_id: "reason.A" } },
+      payload: { chat_id: "oc_a", worker_id: "reason.A" },
       worker_id: "admin.0",
       request_id: "call-set",
       timestamp: Date.now(),
@@ -475,7 +409,7 @@ describe("LarkWorker", () => {
       id: "r3",
       type: LARK_REASON_UNSET,
       status: "created",
-      payload: { worker_id: "admin.0", arguments: { chat_id: "oc_a" } },
+      payload: { chat_id: "oc_a" },
       worker_id: "admin.0",
       request_id: "call-unset",
       timestamp: Date.now(),
@@ -515,9 +449,9 @@ describe("LarkWorker", () => {
       id: "r4",
       type: LARK_REASON_GET,
       status: "created",
-      payload: { worker_id: "admin.0", arguments: {} },
-      worker_id: "admin.0",
-      request_id: "call-get",
+    	  payload: {},
+    	  worker_id: "admin.0",
+    	  request_id: "call-get",
       timestamp: Date.now(),
     });
     await flush();
@@ -558,7 +492,7 @@ describe("LarkWorker", () => {
       id: "rf1",
       type: LARK_REASON_SET,
       status: "created",
-      payload: { worker_id: "admin.0", arguments: { fallback: true, worker_id: "reason.FB" } },
+      payload: { fallback: true, worker_id: "reason.FB" },
       worker_id: "admin.0",
       request_id: "call-set-fb",
       timestamp: Date.now(),

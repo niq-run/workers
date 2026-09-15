@@ -5,18 +5,19 @@
  *
  * Flow:
  *   Feishu message ──worker.input──▶ bound reason worker
- *   reason reply   ──worker.input──▶ this worker      ──send──▶ Feishu chat
+ *   reason reply   ──lark.send────▶ this worker      ──send──▶ Feishu chat
  *
  * Inbound: every Feishu message is forwarded to a single bound reason worker
- * as a `worker.input` event (hiw-style), payload `{ text, input_mode }`, with
- * a `trace_id` this worker generates and remembers. The text is prefixed with
- * a `<system-reminder>` telling reason this came from Feishu and to answer
- * with its `send_message` tool.
+ * as a `worker.input` event with `input_mode: "append"`, payload
+ * `{ text, chat_id, sender_open_id }`. The text is prefixed with a
+ * `<system-reminder>` telling reason this came from Feishu and to reply with
+ * the `lark.send` extension targeting the `chat_id`.
  *
- * Outbound: the reason worker's `send_message` tool replies by sending a
- * `worker.input` back *directed to this worker*, reusing the same `trace_id`
- * (niq's default reason worker propagates it). This worker looks up the
- * trace_id → Feishu chat context and pushes the reply text to that chat.
+ * Outbound: the reason worker replies by calling the `lark.send` extension
+ * (exposed by this worker) with `target` (a chat_id / open_id / user_id) and
+ * `text`. This worker sends that text to the target Feishu chat. The worker
+ * does NOT consume `worker.input` events as replies — `lark.send` is the only
+ * inbound path for reason → Feishu output.
  *
  * Credentials come from the environment: `LARK_APP_ID` / `LARK_APP_SECRET`
  * (+ `LARK_DOMAIN`), and the bus via `NIQ_BUS_URL` / `NIQ_WORKER_ID` /
@@ -247,10 +248,10 @@ export interface LarkBridgeOptions extends LarkConfig {
   /** When set, echo Feishu messages back instead of forwarding (connectivity check). */
   echo?: boolean;
   /**
-   * Default Feishu user (open_id) to deliver proactive messages to — when a
-   * reason worker sends this worker a worker.input that has no Feishu chat
-   * context (i.e. not a reply to an inbound Feishu message), the text is sent
-   * here instead of being dropped.
+   * Default Feishu user (open_id) a `lark.send` call falls back to when the
+   * reason worker does not supply an explicit `target` (e.g. a proactive push
+   * with no chat context). Without a target and no default user, the call
+   * fails with `request.failed`.
    */
   defaultUserOpenId?: string;
   /** Where to send diagnostics. Defaults to `console`. */
@@ -301,12 +302,6 @@ export class LarkWorker {
   /** Settled once both the bus and Feishu sides are connected (see connect()). */
   private readonly ready: Promise<void>;
   private readonly markReady: () => void;
-
-  /** trace_id (from the worker.input we send to reason) → Feishu chat context. */
-  private readonly pending = new Map<
-    string,
-    { chatId: string; messageId: string }
-  >();
 
   constructor(opts: LarkBridgeOptions) {
     const create = opts.createChannel ?? createLarkChannel;
@@ -487,14 +482,13 @@ export class LarkWorker {
   /** Connect and then run the bus event loop (blocks until {@link close}). */
   async run(): Promise<void> {
     await this.connect();
+    // The worker never acts on `worker.input` events — reason does not reply
+    // to lark that way. Replies arrive only via the `lark.send` extension, and
+    // routing is managed via the `lark.reason.*` extensions; every event is
+    // dispatched to the registered extension handlers (unknown events are
+    // ignored).
     for await (const evt of this.bus.events()) {
-      if (evt.type === "worker.input") {
-        // Backward path: reason used send_message→worker.input (trace or default user).
-        await this.handleReasonReply(evt);
-      } else {
-        // Peer tool calls (e.g. the lark.send extension), own-tool events, etc.
-        this.base.dispatchExtension(evt);
-      }
+      this.base.dispatchExtension(evt);
     }
   }
 
@@ -528,16 +522,12 @@ export class LarkWorker {
       return;
     }
 
-    const traceId = `feishu-${msg.chatId}-${msg.messageId}`;
-    this.pending.set(traceId, { chatId: msg.chatId, messageId: msg.messageId });
-
     const input = createEvent("worker.input", {
       text: this.renderReminder(msg) + "\n" + msg.content,
       chat_id: msg.chatId,
       sender_open_id: msg.senderId,
-      input_mode: "interrupt",
+      input_mode: "append",
     });
-    input.trace_id = traceId;
     const reasonWorker = this.reasonWorkerFor(msg.chatId);
     if (!reasonWorker) {
       this.logger.warn(
@@ -547,7 +537,7 @@ export class LarkWorker {
     }
     await this.bus.send(input, reasonWorker);
     this.logger.info(
-      `[${NS}] sent worker.input trace=${traceId} → reason ${reasonWorker} (chat ${msg.chatId})`,
+      `[${NS}] sent worker.input → reason ${reasonWorker} (chat ${msg.chatId})`,
     );
   }
 
@@ -611,45 +601,6 @@ export class LarkWorker {
     return this.systemReminder
       .replaceAll("{chat_id}", msg.chatId)
       .replaceAll("{sender_open_id}", msg.senderId);
-  }
-
-  private async handleReasonReply(evt: Event): Promise<void> {
-    const ctx = evt.trace_id ? this.pending.get(evt.trace_id) : undefined;
-    const text =
-      typeof evt.payload?.text === "string"
-        ? evt.payload.text
-        : JSON.stringify(evt.payload ?? {});
-
-    // Reactive: this is the reply to an inbound Feishu message → deliver to its chat.
-    if (ctx) {
-      await this.lark.send(ctx.chatId, { text });
-      this.logger.info(
-        `[${NS}] → feishu chat=${ctx.chatId} reply=${JSON.stringify(text)}`,
-      );
-      this.pending.delete(evt.trace_id as string);
-      return;
-    }
-
-    // Proactive: reason initiated (no inbound Feishu context). Deliver to an
-    // explicit recipient in the payload if present, else the default user.
-    const explicit =
-      (typeof evt.payload?.open_id === "string" && evt.payload.open_id) ||
-      (typeof evt.payload?.user_open_id === "string" && evt.payload.user_open_id) ||
-      (typeof evt.payload?.chat_id === "string" && evt.payload.chat_id) ||
-      "";
-    const to = explicit || this.defaultUserOpenId;
-    if (!to) {
-      this.logger.info(
-        `[${NS}] received proactive worker.input with no recipient (trace=${evt.trace_id ?? "none"}); no default user open_id configured`,
-      );
-      return;
-    }
-    await this.lark.send(to, { text });
-    this.logger.info(
-      `[${NS}] proactive → ${
-        explicit ? "payload recipient" : "default user"
-      } ${to} text=${JSON.stringify(text)}`,
-    );
   }
 
   /**
