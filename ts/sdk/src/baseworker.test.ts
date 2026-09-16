@@ -53,43 +53,24 @@ describe("extension registry", () => {
     expect(seen).toEqual([evt]);
   });
 
-  it("multiplexes on keyField and replaces same-key registrations", () => {
+  it("replaces same-event registrations", () => {
     const w = makeWorker(new FakeChannel());
     const hits: string[] = [];
-    w.register(
-      { event: "tool.invoke", keyField: "name", key: "upper" },
-      () => {
-        hits.push("upper");
-      },
-    );
-    w.register(
-      { event: "tool.invoke", keyField: "name", key: "lower" },
-      () => {
-        hits.push("lower");
-      },
-    );
-    // Re-registering the same (event, keyField, key) replaces it.
-    w.register(
-      { event: "tool.invoke", keyField: "name", key: "upper" },
-      () => {
-        hits.push("upper-2");
-      },
-    );
+    w.register({ event: "tool.upper" }, () => {
+      hits.push("upper");
+    });
+    w.register({ event: "tool.lower" }, () => {
+      hits.push("lower");
+    });
+    // Re-registering the same event replaces it.
+    w.register({ event: "tool.upper" }, () => {
+      hits.push("upper-2");
+    });
 
-    expect(w.dispatchExtension(makeEvent({ payload: { name: "lower" } }))).toBe(
-      true,
-    );
-    expect(w.dispatchExtension(makeEvent({ payload: { name: "upper" } }))).toBe(
-      true,
-    );
-    // Wrong discriminator value: no handler matches.
-    expect(
-      w.dispatchExtension(makeEvent({ payload: { name: "other" } })),
-    ).toBe(false);
-    // Non-string discriminator value: no match.
-    expect(w.dispatchExtension(makeEvent({ payload: { name: 42 } }))).toBe(
-      false,
-    );
+    expect(w.dispatchExtension(makeEvent({ type: "tool.lower" }))).toBe(true);
+    expect(w.dispatchExtension(makeEvent({ type: "tool.upper" }))).toBe(true);
+    // An event no worker handles does not match.
+    expect(w.dispatchExtension(makeEvent({ type: "tool.other" }))).toBe(false);
     expect(hits).toEqual(["lower", "upper-2"]);
   });
 
@@ -103,8 +84,6 @@ describe("extension registry", () => {
     w.register(
       {
         event: "tool.invoke",
-        keyField: "name",
-        key: "echo",
         description: "Echo a message",
         parameters: { prefix: "..." },
       },
@@ -119,7 +98,7 @@ describe("extension registry", () => {
       {
         event: "tool.invoke",
         desc: "Echo a message",
-        parameters: { prefix: "...", name: "echo" },
+        parameters: { prefix: "..." },
       },
     ]);
     expect(w.watchEntries(true)).toHaveLength(2);
@@ -131,7 +110,8 @@ describe("tool call parsing", () => {
     const evt = makeEvent({
       request_id: "req-7",
       trace_id: "trace-1",
-      payload: { name: "echo", arguments: { text: "hi" } },
+      type: "echo",
+      payload: { text: "hi" },
     });
     expect(parseToolCall(evt)).toEqual({
       callID: "req-7",
@@ -141,9 +121,9 @@ describe("tool call parsing", () => {
       traceID: "trace-1",
     });
 
-    const bare = parseToolCall(makeEvent({ payload: {} }));
+    const bare = parseToolCall(makeEvent({ type: "echo", payload: {} }));
     expect(bare.callID).toBe("");
-    expect(bare.name).toBe("");
+    expect(bare.name).toBe("echo");
     expect(bare.args).toEqual({});
   });
 
@@ -192,9 +172,10 @@ describe("replies", () => {
     const ch = new FakeChannel();
     const w = makeWorker(ch);
     await w.replyUnknownTool(parseToolCall(makeEvent({
+      type: "nope",
       request_id: "req-9",
       trace_id: "t",
-      payload: { name: "nope" },
+      payload: {},
     })));
 
     const { evt } = ch.sent[0];
@@ -209,7 +190,7 @@ describe("announceReady", () => {
     const ch = new FakeChannel();
     const w = makeWorker(ch);
     w.register(
-      { event: "tool.invoke", keyField: "name", key: "echo", description: "Echo" },
+      { event: "tool.invoke", description: "Echo" },
       () => {},
     );
     w.register(
@@ -224,11 +205,8 @@ describe("announceReady", () => {
     expect(presence.type).toBe(EventType.WorkerReady);
     expect(presence.exclude_worker_id).toBe("echo.0");
     expect(presence.payload).toEqual({
-      worker_id: "echo.0",
       type: "echo",
-      watch: [
-        { event: "tool.invoke", desc: "Echo", parameters: { name: "echo" } },
-      ],
+      watch: [{ event: "tool.invoke", desc: "Echo" }],
       publishes: [{ event: "echo.done" }],
     });
   });

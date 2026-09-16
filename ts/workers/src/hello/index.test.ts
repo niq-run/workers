@@ -141,7 +141,6 @@ describe("HelloWorker", () => {
     expect(ready.type).toBe("worker.ready");
     expect(ready.exclude_worker_id).toBe("hello@me");
     expect(ready.payload).toEqual({
-      worker_id: "hello@me",
       type: "hello",
       watch: [
         {

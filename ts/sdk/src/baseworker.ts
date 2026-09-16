@@ -46,17 +46,13 @@ export class BaseWorker {
   }
 
   /**
-   * Route an event to the registered extension matching its event type and
-   * discriminator (`payload[keyField] === key`). Returns whether a handler
-   * ran; the first matching registration wins. Async handlers are not awaited.
+   * Route an event to the registered extension matching its event type.
+   * Returns whether a handler ran; the first matching registration wins. Async
+   * handlers are not awaited.
    */
   dispatchExtension(evt: Event): boolean {
     for (const { ext, handler } of this.regs.values()) {
       if (ext.event !== evt.type) continue;
-      if (ext.keyField !== undefined && ext.keyField !== "") {
-        const v = evt.payload[ext.keyField];
-        if (typeof v !== "string" || v !== ext.key) continue;
-      }
       void handler(evt);
       return true;
     }
@@ -81,10 +77,7 @@ export class BaseWorker {
         event: ext.event,
         desc: ext.description,
       };
-      if (ext.keyField) {
-        const params = { ...ext.parameters, [ext.keyField]: ext.key };
-        entry["parameters"] = params;
-      } else if (ext.parameters) {
+      if (ext.parameters) {
         entry["parameters"] = ext.parameters;
       }
       out.push(entry);
@@ -103,7 +96,6 @@ export class BaseWorker {
     publishes?: Record<string, unknown>[],
   ): Promise<void> {
     const payload: Record<string, unknown> = {
-      worker_id: this.id,
       type: workerType,
       watch: this.watchEntries(false),
     };
@@ -208,12 +200,11 @@ export class BaseWorker {
 
 /** Extract the common fields from a tool-invocation event. Mirrors `baseworker.ParseToolCall`. */
 export function parseToolCall(evt: Event): ToolCall {
-  const args = evt.payload["arguments"];
   return {
     callID: evt.request_id ?? "",
-    name: argString(evt.payload, "name"),
+    name: evt.type,
     callerID: evt.worker_id,
-    args: isRecord(args) ? args : {},
+    args: isRecord(evt.payload) ? evt.payload : {},
     traceID: evt.trace_id ?? "",
   };
 }
@@ -239,11 +230,11 @@ export function argInt(
   return def;
 }
 
-// The registry key joins the three identifying fields with NUL (\x00), which
-// never occurs in event type / field / key identifiers, so distinct
-// extensions can never collide. Internal-only; never surfaced on the wire.
+// The registry key is the event type with a NUL (\x00) suffix, which never
+// occurs in an event-type identifier, so distinct extensions can never
+// collide. Internal-only; never surfaced on the wire.
 function extensionKey(ext: Extension): string {
-  return `${ext.event}\x00${ext.keyField ?? ""}\x00${ext.key ?? ""}`;
+  return `${ext.event}\x00`;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

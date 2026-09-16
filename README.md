@@ -69,7 +69,7 @@ await worker.run(); // connects to Lark and stays alive until SIGINT
 | Subpath | Description |
 |---|---|
 | `@niq-ai/workers/hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
-| `@niq-ai/workers/lark` | Feishu long-connection bridge: connects to Lark over WebSocket, forwards inbound messages to a bound reason worker (via `worker.input` + `<system-reminder>`), and pushes the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
+| `@niq-ai/workers/lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`src/lark/README.md`](ts/workers/src/lark/README.md) |
 
 ## Add a TS worker
 

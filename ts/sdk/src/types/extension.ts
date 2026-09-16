@@ -2,21 +2,13 @@ import type { Event } from "./event.js";
 
 /**
  * Extension describes an event a worker responds to. It is how a worker is
- * extended: each registration teaches the base to recognize one more
- * (event, discriminator) pair and answer it with a handler.
- * Mirrors `baseworker.Extension`.
+ * extended: each registration teaches the base to recognize one more event
+ * and answer it with a handler. The event type IS the extension's identity —
+ * distinct things are distinct events. Mirrors `baseworker.Extension`.
  */
 export interface Extension {
   /** The event type the extension responds to — its identity. */
   event: string;
-  /**
-   * Payload field holding the discriminator when several extensions multiplex
-   * on one event type. Empty/absent means the extension is identified by the
-   * event type alone.
-   */
-  keyField?: string;
-  /** The value `keyField` must equal. Empty when `keyField` is absent. */
-  key?: string;
   /**
    * Marks an extension only the declaring worker itself serves (e.g.
    * send_message, list_workers). Left out of the peer-facing `worker.ready`
