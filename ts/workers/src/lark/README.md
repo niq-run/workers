@@ -14,6 +14,13 @@ worker) with `target` (chat_id / open_id / user_id) and `text`. The lark worker
 does **not** consume `worker.input` events as replies — `lark.send` is the only
 inbound path for reason → Feishu output.
 
+**Append mode (default).** Several `lark.send` calls to the same target within
+one reply turn are appended onto a single message: each new user Feishu message
+starts a fresh outbound message, and subsequent sends to that chat extend it in
+place (Feishu message edit) instead of posting a new message per call. This
+keeps a reasoning turn from flooding the chat with one message per `lark.send`.
+Set `appendOutbound: false` to disable and post a separate message per call.
+
 Built on `@larksuite/channel`. It is a **third-party process worker**: launched
 out-of-process by the niq project supervisor (via `start-worker.mjs`), not
 managed in the niq main repo.

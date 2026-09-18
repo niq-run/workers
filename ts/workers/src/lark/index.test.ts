@@ -85,6 +85,7 @@ function fakeChannel() {
       sent.push({ to, input });
       return { messageId: "x" };
     }),
+    editMessage: vi.fn(async () => {}),
   };
   return {
     channel,
@@ -114,6 +115,7 @@ function makeWorker(opts: {
   stateStore?: any;
   echo?: boolean;
   defaultUserOpenId?: string;
+  appendOutbound?: boolean;
 }) {
   const { channel, sent, getHandler } = fakeChannel();
   const { store, saved } = fakeStateStore();
@@ -133,6 +135,9 @@ function makeWorker(opts: {
     ...(opts.echo !== undefined ? { echo: opts.echo } : {}),
     ...(opts.defaultUserOpenId !== undefined
       ? { defaultUserOpenId: opts.defaultUserOpenId }
+      : {}),
+    ...(opts.appendOutbound !== undefined
+      ? { appendOutbound: opts.appendOutbound }
       : {}),
   });
   return { worker, channel, larkSent: sent, getHandler, stateSaved: saved };
@@ -300,6 +305,122 @@ describe("LarkWorker", () => {
     expect(reply.evt.type).toBe("request.completed");
     expect(reply.evt.request_id).toBe("call-1");
     expect(reply.evt.trace_id).toBe("reason-uuid-3");
+
+    sink.end();
+    await running;
+  });
+
+  it("appends subsequent lark.send calls to the same target into one message", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, channel, larkSent } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "a1",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", text: "part one" },
+      worker_id: "reason.0",
+      request_id: "call-1",
+      timestamp: Date.now(),
+    });
+    sink.push({
+      id: "a2",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", text: "part two" },
+      worker_id: "reason.0",
+      request_id: "call-2",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(larkSent).toEqual([{ to: "oc_t", input: { text: "part one" } }]);
+    expect(channel.editMessage).toHaveBeenCalledWith("x", "part one\npart two");
+
+    sink.end();
+    await running;
+  });
+
+  it("starts a fresh message per inbound Feishu turn (append resets)", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, channel, larkSent, getHandler } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+
+    // First user turn.
+    await getHandler()({
+      chatId: "oc_t",
+      messageId: "m1",
+      content: "hi",
+      senderId: "ou_1",
+    });
+    sink.push({
+      id: "b1",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", text: "reply A" },
+      worker_id: "reason.0",
+      request_id: "call-1",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(larkSent).toEqual([{ to: "oc_t", input: { text: "reply A" } }]);
+
+    // Second user turn resets the target → next lark.send posts a fresh message.
+    await getHandler()({
+      chatId: "oc_t",
+      messageId: "m2",
+      content: "again",
+      senderId: "ou_1",
+    });
+    sink.push({
+      id: "b2",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", text: "reply B" },
+      worker_id: "reason.0",
+      request_id: "call-2",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(larkSent).toEqual([
+      { to: "oc_t", input: { text: "reply A" } },
+      { to: "oc_t", input: { text: "reply B" } },
+    ]);
+    expect(channel.editMessage).not.toHaveBeenCalled();
+
+    sink.end();
+    await running;
+  });
+
+  it("posts a separate message per lark.send when appendOutbound is false", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, channel, larkSent } = makeWorker({ bus, appendOutbound: false });
+
+    const running = worker.run();
+    await flush();
+    for (const [i, text] of ["one", "two"].entries()) {
+      sink.push({
+        id: `c${i}`,
+        type: "lark.send",
+        status: "created",
+        payload: { target: "oc_t", text },
+        worker_id: "reason.0",
+        request_id: `call-${i}`,
+        timestamp: Date.now(),
+      });
+    }
+    await flush();
+
+    expect(larkSent).toEqual([
+      { to: "oc_t", input: { text: "one" } },
+      { to: "oc_t", input: { text: "two" } },
+    ]);
+    expect(channel.editMessage).not.toHaveBeenCalled();
 
     sink.end();
     await running;

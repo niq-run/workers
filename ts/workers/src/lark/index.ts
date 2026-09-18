@@ -78,7 +78,9 @@ export interface LarkChannel {
     type: string,
     handler: (payload: unknown) => void | Promise<void>,
   ): () => void;
-  send(to: string, input: SendInput): Promise<unknown>;
+  send(to: string, input: SendInput): Promise<{ messageId: string }>;
+  /** Rewrite an already-sent text message's content in place (Feishu message edit). */
+  editMessage(messageId: string, text: string): Promise<void>;
 }
 
 /** A minimal logger interface, satisfied by `console`. */
@@ -201,7 +203,9 @@ Chat id: {chat_id}
 Sender open_id: {sender_open_id}
 Reply to the user by calling the lark.send tool with target = "{chat_id}" and
 text = your reply. The reply is delivered straight back into the user's Feishu
-chat. Keep your answer in the language the user wrote in, and do not preface it
+chat. Several lark.send calls to the same target within one reply are appended
+into a single message, so just send your answer — do not number or header each
+piece. Keep your answer in the language the user wrote in, and do not preface it
 with any system notes.
 </system-reminder>`;
 
@@ -254,6 +258,14 @@ export interface LarkBridgeOptions extends LarkConfig {
    * fails with `request.failed`.
    */
   defaultUserOpenId?: string;
+  /**
+   * When a reason worker makes several `lark.send` calls to the same target
+   * within one reply turn, append each piece of text onto the message it last
+   * sent to that target (updating it in place via Feishu's message edit) instead
+   * of posting a brand-new message per call. Each new inbound Feishu message
+   * starts a fresh target message. Defaults to `true`.
+   */
+  appendOutbound?: boolean;
   /** Where to send diagnostics. Defaults to `console`. */
   logger?: Logger;
 }
@@ -298,6 +310,12 @@ export class LarkWorker {
   private readonly systemReminder: string;
   private readonly echo: boolean;
   private readonly defaultUserOpenId: string;
+  private readonly appendMode: boolean;
+  /** target → the last outbound message this worker is extending (append mode); text is the in-place accumulated content. */
+  private readonly appendTargets = new Map<
+    string,
+    { messageId: string; text: string }
+  >();
   private readonly logger: Logger;
   /** Settled once both the bus and Feishu sides are connected (see connect()). */
   private readonly ready: Promise<void>;
@@ -325,6 +343,7 @@ export class LarkWorker {
     this.systemReminder = opts.systemReminder ?? DEFAULT_SYSTEM_REMINDER;
     this.echo = opts.echo ?? false;
     this.defaultUserOpenId = opts.defaultUserOpenId ?? "";
+    this.appendMode = opts.appendOutbound ?? true;
     this.logger = opts.logger ?? DEFAULT_LOGGER;
     this.base = new BaseWorker({
       id: this.workerID,
@@ -522,6 +541,11 @@ export class LarkWorker {
       return;
     }
 
+    // A new user message begins a fresh reply: forget any in-progress
+    // outbound append so the next lark.send posts a new message instead of
+    // extending the previous turn's.
+    this.appendTargets.delete(msg.chatId);
+
     const input = createEvent("worker.input", {
       text: this.renderReminder(msg) + "\n" + msg.content,
       chat_id: msg.chatId,
@@ -639,10 +663,17 @@ export class LarkWorker {
     }
 
     try {
-      await this.lark.send(target, { text });
-      this.logger.info(`[${NS}] lark.send → ${target} text=${JSON.stringify(text)}`);
+      if (this.appendMode) {
+        await this.sendAppended(target, text);
+      } else {
+        await this.lark.send(target, { text });
+        this.logger.info(`[${NS}] lark.send → ${target} text=${JSON.stringify(text)}`);
+      }
       await this.base.replyCompleted(tc.callerID, tc.callID, "sent", tc.traceID);
     } catch (err) {
+      // Failed mid-append: drop the half-updated entry so the next send starts
+      // a fresh message rather than corrupting the accumulated text.
+      this.appendTargets.delete(target);
       this.logger.error(`[${NS}] lark.send failed:`, err);
       await this.base.replyFailed(
         tc.callerID,
@@ -651,6 +682,31 @@ export class LarkWorker {
         tc.traceID,
       );
     }
+  }
+
+  /**
+   * Append-mode send: if this target already has an in-progress message from
+   * this turn, extend it in place; otherwise post a fresh message and remember
+   * it. Repeated `lark.send` calls to the same target therefore assemble into
+   * one message instead of flooding the Feishu chat.
+   */
+  private async sendAppended(target: string, text: string): Promise<void> {
+    const pending = this.appendTargets.get(target);
+    if (!pending) {
+      const res = await this.lark.send(target, { text });
+      this.appendTargets.set(target, { messageId: res.messageId, text });
+      this.logger.info(`[${NS}] lark.send → ${target} text=${JSON.stringify(text)}`);
+      return;
+    }
+    // Join segments with a single newline so separate sends read as distinct
+    // parts, not run-on text.
+    const merged =
+      pending.text.replace(/\s+$/, "") + "\n" + text.replace(/\s+$/, "");
+    await this.lark.editMessage(pending.messageId, merged);
+    pending.text = merged;
+    this.logger.info(
+      `[${NS}] lark.append → ${target} (extended ${pending.messageId})`,
+    );
   }
 
   /**
