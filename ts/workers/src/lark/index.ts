@@ -49,6 +49,7 @@ import {
   BaseWorker,
   argString,
   createEvent,
+  EventType,
   parseToolCall,
   type Event,
   type WorkerSideChannel,
@@ -492,10 +493,21 @@ export class LarkWorker {
     this.logger.info(
       `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name}`,
     );
-    await this.base.announceReady("lark", [
-      { type: "worker.input", description: "Feishu messages forwarded to reason" },
-    ]);
-    this.logger.info(`[${NS}] announced worker.ready`);
+    // Presence is live-only, not durable history. The SDK's announceReady would
+    // persist this worker.ready into the project event store (it sets no
+    // transient flag); a presence stalling the durable log is noise. Broadcast
+    // a transient ready instead so lark's presence never lands in events.db.
+    const ready = createEvent(EventType.WorkerReady, {
+      type: "lark",
+      watch: this.base.watchEntries(false),
+      publishes: [
+        { type: "worker.input", description: "Feishu messages forwarded to reason" },
+      ],
+    });
+    ready.transient = true; // presence: live-only, not durable history
+    ready.exclude_worker_id = this.workerID;
+    await this.base.channel.broadcast(ready);
+    this.logger.info(`[${NS}] announced worker.ready (transient)`);
   }
 
   /** Connect and then run the bus event loop (blocks until {@link close}). */
