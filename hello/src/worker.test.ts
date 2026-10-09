@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HelloWorker } from "./index.js";
+import { HelloWorker } from "./worker.js";
 
 interface RecordedPublish {
   url: string;

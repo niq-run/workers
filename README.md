@@ -1,8 +1,8 @@
 # workers
 
-This repository hosts both the **worker SDK** (`@niq.run/worker-sdk`) and a
-collection of **workers** — interesting and useful workers that don't belong in
-the core niq runtime but are fine to ship on their own.
+This repository hosts **niq extension workers** — interesting and useful workers
+that don't belong in the core niq runtime but are fine to ship on their own.
+Each worker is an **independent project** (own package, own launcher).
 
 > **Status: early, moving fast.** Like niq itself, this is early-stage and APIs
 > may change without notice.
@@ -12,84 +12,98 @@ the core niq runtime but are fine to ship on their own.
 In niq, a **Worker** is the single extension concept: an actor-like unit that
 holds its own state and communicates only by sending and reacting to messages
 over an event bus. Every worker in this repo is such a unit, implemented in
-different languages, connecting to the bus over the bus protocol (HTTP + SSE).
+TypeScript and connecting to the bus over the bus protocol (HTTP + SSE) with the
+TypeScript SDK.
 
 ## Repository layout
 
-Organized by language:
+Flat, one directory per worker:
 
 ```
 workers/
-├── ts/                  # TypeScript
-│   ├── sdk/             # @niq.run/worker-sdk — the TS worker SDK
-│   └── workers/         # @niq-ai/workers — TS worker collection (subpath exports)
-└── go/                  # Go
-    └── workers/         # Go worker directory (skeleton, no concrete workers yet)
+├── package.json     # npm workspace root — an entry exists for each worker below
+├── tsconfig.base.json
+├── hello/           # @niq-ai/hello-worker — minimal demo (bin: niq-hello)
+└── lark/            # @niq-ai/lark-worker  — Feishu WebSocket bridge (bin: niq-lark)
 ```
 
-- **TS SDK** (`@niq.run/worker-sdk`): a convenience layer for connecting to the
-  bus (HTTP + SSE), maintained independently of the niq core repo.
-- **TS workers** (`@niq-ai/workers`): imported by subpath, e.g.
-  `@niq-ai/workers/lark`.
-- **Go workers** (planned): Go workers will import the core repo module
-  `github.com/54c1/niq` directly (e.g. `httptrans.WorkerSide`) to connect to
-  the bus — no separate SDK needed. See `go/workers/README.md`.
-
-## Core repository
-
-This repo is complementary to the niq core runtime:
-
-- **niq core** — <https://github.com/niq-run/niq>: the event-driven,
-  decentralized agent runtime (the event bus, the worker swarm, and the
-  in-process workers).
-- **This repo** (`niq-run/workers`): the worker SDK plus out-of-process /
-  standalone workers built on top of it.
+- Each worker is an independent npm package with its own `bin`, e.g.
+  `niq-hello`, `niq-lark`. The `bin` targets a compiled app entry
+  (`dist/start.js`, built from `src/start.ts`), so each worker runs as a
+  standalone app with one command — the MCP-server style.
+- Workers depend on the **`@niq.run/worker-sdk` npm package** (published from the
+  [niq core repo](https://github.com/niq-run/niq), under `niq/sdk/ts`). The
+  `start.ts` entrypoints reuse the SDK's CLI helpers (`parseCliArgs`,
+  `busConnFromArgs`, `runWorkerApp`) so connection bootstrap and arg parsing
+  aren't re-implemented per worker.
 
 ## Install
 
 ```sh
-npm install @niq-ai/workers
+npm install -g @niq-ai/hello-worker
+npm install -g @niq-ai/lark-worker
 ```
 
-## Usage
-
-Each TS worker is imported by subpath, e.g. the Lark (Feishu) bridge:
+Then run each worker's own launcher, or import it in code:
 
 ```ts
-import { LarkEchoWorker, larkConfigFromEnv } from "@niq-ai/workers/lark";
-
-// Reads LARK_APP_ID / LARK_APP_SECRET from the environment.
-const worker = new LarkEchoWorker(larkConfigFromEnv());
-
-await worker.run(); // connects to Lark and stays alive until SIGINT
+import { LarkWorker, larkConfigFromEnv } from "@niq-ai/lark-worker";
 ```
 
 ## Current workers
 
-| Subpath | Description |
-|---|---|
-| `@niq-ai/workers/hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
-| `@niq-ai/workers/lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`src/lark/README.md`](ts/workers/src/lark/README.md) |
+| Package | Launcher | Description |
+|---|---|---|
+| `@niq-ai/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
+| `@niq-ai/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`lark/src/README.md`](lark/src/README.md) |
 
-## Add a TS worker
+## Add a worker
 
-1. Create the worker module under `ts/workers/src/<name>/` (see `ts/workers/src/hello/`).
-2. Add the matching subpath to the `exports` map in `ts/workers/package.json`.
-3. Register an entry in the `WORKERS` registry in `ts/workers/src/index.ts`.
-4. Add tests, then run `npm test` and `npm run typecheck`.
+1. Create the worker as its own package under this repo: `src/worker.ts` (the worker
+   class + config helpers, importable in-process or by tests) plus `src/start.ts`
+   (the `#!/usr/bin/env node` entrypoint compiled to `dist/start.js`, which is what
+   the package `bin` points at — this is what makes the worker usable as a standalone
+   app run with one command). Add a `package.json` with the `bin` field, and a
+   `tsconfig.json` extending `../tsconfig.base.json`.
+2. Register it in the `workspaces` array of the root `package.json`.
+3. Add tests, then run `npm test`, `npm run typecheck`, and `npm run build` from
+   the repo root.
 
 ## Development
 
 ```sh
-cd ts             # npm workspace root (SDK + TS workers; go/ is not npm-managed)
-npm install
+npm install        # one npm workspace per worker
 npm run typecheck
-npm test        # vitest
-npm run build   # tsc -> dist/
+npm test           # vitest (each workspace)
+npm run build      # tsc -> dist/
 ```
 
-`ts/` is the npm workspace root, covering `ts/sdk` and `ts/workers`; you can
-also `cd ts/workers` to run a single package.
+Workers resolve `@niq.run/worker-sdk` from npm. When `start.ts` relies on a
+**new** SDK feature, publish the SDK first (from `niq/sdk/ts`, `npm run
+release`) so the published version carries it; until then the local
+`typecheck` will report the un-exported helpers. To verify against an
+unpublished SDK locally, point `@niq.run/worker-sdk` in the worker's
+`package.json` at `file:../../niq/sdk/ts`.
+
+## SDK CLI helpers used by `start.ts`
+
+Out-of-process workers share launch plumbing via `@niq.run/worker-sdk`:
+
+- `parseCliArgs(argv)` — parse `--key value` / `--key`, flag `--help`/`-h`.
+- `busConnFromArgs(opts)` — layer `--bus-url` / `--worker-id` / `--credential`
+  over the supervisor-injected env (`NIQ_BUS_URL` / `NIQ_WORKER_ID` /
+  `NIQ_WORKER_CREDENTIAL`) into bus connection params.
+- `runWorkerApp(main)` — run the app body, log + set `exitCode = 1` on failure.
+
+
+## Related
+
+- **niq core** — <https://github.com/niq-run/niq>: the event-driven,
+  decentralized agent runtime (the event bus, the worker swarm, and the
+  in-process workers). The TypeScript worker SDK (`@niq.run/worker-sdk`) lives
+  here under `niq/sdk/ts`.
+- **This repo** (`niq-run/workers`): standalone (out-of-process) workers built
+  on that SDK.
 
 ## License
 

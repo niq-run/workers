@@ -1,0 +1,16 @@
+{
+  "name": "niq-workers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "niq extension workers — each worker is an independent package under this repo.",
+  "workspaces": [
+    "hello",
+    "lark"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "license": "MIT"
+}

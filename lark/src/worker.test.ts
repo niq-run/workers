@@ -7,7 +7,7 @@ import {
   LARK_REASON_GET,
   type LarkChannel,
   type LarkStateStore,
-} from "./index.js";
+} from "./worker.js";
 import type { Event, WorkerSideChannel } from "@niq.run/worker-sdk";
 
 function eventSink() {

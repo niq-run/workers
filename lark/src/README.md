@@ -22,19 +22,19 @@ keeps a reasoning turn from flooding the chat with one message per `lark.send`.
 Set `appendOutbound: false` to disable and post a separate message per call.
 
 Built on `@larksuite/channel`. It is a **third-party process worker**: launched
-out-of-process by the niq project supervisor (via `start-worker.mjs`), not
-managed in the niq main repo.
+out-of-process by the niq project supervisor (via `niq-lark`), not managed in
+the niq main repo.
 
 ## Build & run
 
 ```sh
 # from the npm workspace root
-cd ts
 npm install
 npm run build
 
-# launch the lark worker
-node ts/workers/start-worker.mjs lark
+# launch the lark worker (compiled app entry = the package bin)
+node lark/dist/start.js
+# or, once installed: niq-lark
 ```
 
 All config comes from environment variables (set them in the worker's `env`

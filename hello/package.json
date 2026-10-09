@@ -1,0 +1,33 @@
+{
+  "name": "@niq-ai/hello-worker",
+  "version": "0.1.0",
+  "description": "Minimal niq hello Worker — answers hello.greet requests with a greeting. Built on @niq.run/worker-sdk.",
+  "type": "module",
+  "main": "./dist/worker.js",
+  "types": "./dist/worker.d.ts",
+  "bin": {
+    "niq-hello": "./dist/start.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
+  },
+  "dependencies": {
+    "@niq.run/worker-sdk": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "license": "MIT"
+}
