@@ -1,5 +1,5 @@
 {
-  "name": "@niq-run/hello-worker",
+  "name": "@niq.run/hello-worker",
   "version": "0.1.0",
   "description": "Minimal niq hello Worker — answers hello.greet requests with a greeting. Built on @niq.run/worker-sdk.",
   "type": "module",
