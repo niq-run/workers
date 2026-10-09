@@ -62,9 +62,11 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 
 ## Details
 
-See [`src/README.md`](src/README.md) for the full design: the `worker.input`
-flow, `lark.reason.*` runtime routing (`lark.reason.set` / `unset` / `get`),
-and the persisted routing state (`LARK_STATE_FILE`).
+The worker exposes a runtime routing API through the `lark.reason.*` extension
+group (`lark.reason.set` / `unset` / `get`), and persists its routing state to
+`LARK_STATE_FILE` (an atomic temp-file + rename JSON write, restored on start).
+The bridge forwards each Feishu message to exactly one reason worker,
+resolved per-chat → default → fallback.
 
 ## License
 

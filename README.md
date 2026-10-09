@@ -55,7 +55,7 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 | Package | Launcher | Description |
 |---|---|---|
 | `@niq.run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
-| `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`lark/src/README.md`](lark/src/README.md) |
+| `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
 
 ## Add a worker
 
