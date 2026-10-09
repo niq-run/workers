@@ -23,8 +23,9 @@ Flat, one directory per worker:
 workers/
 ├── package.json     # npm workspace root — an entry exists for each worker below
 ├── tsconfig.base.json
-├── hello/           # @niq.run/hello-worker — minimal demo (bin: niq-hello)
-└── lark/            # @niq.run/lark-worker  — Feishu WebSocket bridge (bin: niq-lark)
+├── hello/           # @niq.run/hello-worker  — minimal demo (bin: niq-hello)
+├── lark/            # @niq.run/lark-worker   — Feishu WebSocket bridge (bin: niq-lark)
+└── tavily/          # @niq.run/tavily-worker — web search (bin: niq-tavily)
 ```
 
 - Each worker is an independent npm package with its own `bin`, e.g.
@@ -42,6 +43,7 @@ workers/
 ```sh
 npm install -g @niq.run/hello-worker
 npm install -g @niq.run/lark-worker
+npm install -g @niq.run/tavily-worker
 ```
 
 Then run each worker's own launcher, or import it in code:
@@ -56,6 +58,7 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 |---|---|---|
 | `@niq.run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
 | `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
+| `@niq.run/tavily-worker` | `niq-tavily` | Web-search bridge: answers `tavily.search` requests with the Tavily answer + top sources |
 
 ## Add a worker
 
