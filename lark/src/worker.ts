@@ -363,7 +363,7 @@ export class LarkWorker {
       {
         event: LARK_SEND_EVENT,
         description:
-          "Send a message to a Feishu user or chat. Provide target (chat_id, open_id, or user_id) and text.",
+          "Send a message to a Feishu user or chat. Provide target (chat_id, open_id, or user_id) and either text or a media source (http(s) URL or local file path): image, file (+file_name), video, or audio. Without a media source it sends text (append-merged across repeated sends).",
         parameters: {
           type: "object",
           properties: {
@@ -371,7 +371,21 @@ export class LarkWorker {
               type: "string",
               description: "Feishu chat_id, open_id, or user_id of the recipient",
             },
-            text: { type: "string", description: "Message text" },
+            text: { type: "string", description: "Message text (used when no media arg is present)" },
+            image: {
+              type: "string",
+              description: "http(s) URL or local file path of an image to send",
+            },
+            file: {
+              type: "string",
+              description: "http(s) URL or local file path to send as a file attachment",
+            },
+            file_name: {
+              type: "string",
+              description: "Display file name (required for file; defaults to the URL basename)",
+            },
+            video: { type: "string", description: "http(s) URL or local file path of a video to send" },
+            audio: { type: "string", description: "http(s) URL or local file path of an audio to send" },
           },
         },
       },
@@ -653,22 +667,52 @@ export class LarkWorker {
       argString(tc.args, "open_id") ||
       argString(tc.args, "user_id") ||
       this.defaultUserOpenId;
-    const text = argString(tc.args, "text");
 
-    if (!text) {
-      await this.base.replyFailed(
-        tc.callerID,
-        tc.callID,
-        "text is required",
-        tc.traceID,
-      );
-      return;
-    }
     if (!target) {
       await this.base.replyFailed(
         tc.callerID,
         tc.callID,
         "no target given and no default user open_id configured",
+        tc.traceID,
+      );
+      return;
+    }
+
+    const media = buildSendInput(tc.args);
+    if (media) {
+      // A media send always posts a fresh message and clears any pending text
+      // append for this target (Feishu can't edit arbitrary media messages).
+      this.appendTargets.delete(target);
+      try {
+        await this.lark.send(target, media);
+        this.logger.info(
+          `[${NS}] lark.send → ${target} media src=` +
+            JSON.stringify(
+              argString(tc.args, "image") ||
+                argString(tc.args, "file") ||
+                argString(tc.args, "video") ||
+                argString(tc.args, "audio"),
+            ),
+        );
+        await this.base.replyCompleted(tc.callerID, tc.callID, "sent", tc.traceID);
+      } catch (err) {
+        this.logger.error(`[${NS}] lark.send media failed:`, err);
+        await this.base.replyFailed(
+          tc.callerID,
+          tc.callID,
+          (err as Error).message,
+          tc.traceID,
+        );
+      }
+      return;
+    }
+
+    const text = argString(tc.args, "text");
+    if (!text) {
+      await this.base.replyFailed(
+        tc.callerID,
+        tc.callID,
+        "text is required (or provide image/file/video/audio)",
         tc.traceID,
       );
       return;
@@ -797,4 +841,40 @@ export class LarkWorker {
       `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
     );
   }
+}
+
+/**
+ * Build a media `SendInput` from a `lark.send` tool call, or `undefined` when
+ * no media arg is present (the caller then falls back to text). Priority:
+ * image, file, video, audio. A `source` may be an http(s) URL or a local file
+ * path — the channel fetches/reads it — and `file` takes a `file_name`.
+ */
+export function buildSendInput(args: Record<string, unknown>): SendInput | undefined {
+  const image = argString(args, "image");
+  if (image) return { image: { source: image } };
+
+  const file = argString(args, "file");
+  if (file) {
+    return {
+      file: {
+        source: file,
+        fileName: argString(args, "file_name") || mediaBaseName(file),
+      },
+    };
+  }
+
+  const video = argString(args, "video");
+  if (video) return { video: { source: video } };
+
+  const audio = argString(args, "audio");
+  if (audio) return { audio: { source: audio } };
+
+  return undefined;
+}
+
+/** Last path segment of a URL or path, as a credible file display name. */
+function mediaBaseName(src: string): string {
+  const cleaned = src.split("?")[0].split("#")[0];
+  const seg = cleaned.split(/[/\\]/).filter(Boolean).pop();
+  return seg || "file";
 }

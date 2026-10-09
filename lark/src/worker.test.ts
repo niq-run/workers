@@ -5,6 +5,7 @@ import {
   LARK_REASON_SET,
   LARK_REASON_UNSET,
   LARK_REASON_GET,
+  buildSendInput,
   type LarkChannel,
   type LarkStateStore,
 } from "./worker.js";
@@ -651,6 +652,142 @@ describe("LarkWorker", () => {
     await worker.connect();
     await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
     expect(sent[0].targets).toEqual(["reason.FB"]);
+  });
+});
+
+describe("lark.send media", () => {
+  it("sends an image via lark.send and replies request.completed", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, larkSent } = makeWorker({ bus });
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "m1",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_g", image: "https://example.com/a.png" },
+      worker_id: "reason.0",
+      request_id: "call-m1",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(larkSent).toEqual([
+      { to: "oc_g", input: { image: { source: "https://example.com/a.png" } } },
+    ]);
+    const reply = sent[sent.length - 1];
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-m1");
+    sink.end();
+    await running;
+  });
+
+  it("sends a file with an explicit file_name", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, larkSent } = makeWorker({ bus });
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "m2",
+      type: "lark.send",
+      status: "created",
+      payload: {
+        target: "ou_u",
+        file: "https://example.com/report.pdf",
+        file_name: "report.pdf",
+      },
+      worker_id: "reason.0",
+      request_id: "call-m2",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(larkSent).toEqual([
+      {
+        to: "ou_u",
+        input: { file: { source: "https://example.com/report.pdf", fileName: "report.pdf" } },
+      },
+    ]);
+    sink.end();
+    await running;
+  });
+
+  it("derives a file display name from the source when file_name is omitted", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, larkSent } = makeWorker({ bus });
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "m3",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "ou_u", file: "https://example.com/notes.txt?v=1" },
+      worker_id: "reason.0",
+      request_id: "call-m3",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(larkSent[0].input).toEqual({
+      file: { source: "https://example.com/notes.txt?v=1", fileName: "notes.txt" },
+    });
+    sink.end();
+    await running;
+  });
+
+  it("media send clears any pending text append and posts a fresh message", async () => {
+    const { bus, sink } = fakeBus();
+    const { worker, channel, larkSent } = makeWorker({ bus });
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "t1",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", text: "part one" },
+      worker_id: "reason.0",
+      request_id: "call-t1",
+      timestamp: Date.now(),
+    });
+    await flush();
+    // Now a media send to the same target: fresh send, no editMessage.
+    sink.push({
+      id: "m4",
+      type: "lark.send",
+      status: "created",
+      payload: { target: "oc_t", image: "https://x/y.png" },
+      worker_id: "reason.0",
+      request_id: "call-m4",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(larkSent).toEqual([
+      { to: "oc_t", input: { text: "part one" } },
+      { to: "oc_t", input: { image: { source: "https://x/y.png" } } },
+    ]);
+    expect(channel.editMessage).not.toHaveBeenCalled();
+    sink.end();
+    await running;
+  });
+});
+
+describe("buildSendInput", () => {
+  it("maps image/file/video/audio and ignores other args", () => {
+    expect(buildSendInput({ image: "https://x/a.png" })).toEqual({
+      image: { source: "https://x/a.png" },
+    });
+    expect(buildSendInput({ file: "/tmp/a.bin", file_name: "a.bin" })).toEqual({
+      file: { source: "/tmp/a.bin", fileName: "a.bin" },
+    });
+    expect(buildSendInput({ video: "v.mp4" })).toEqual({ video: { source: "v.mp4" } });
+    expect(buildSendInput({ audio: "a.mp3" })).toEqual({ audio: { source: "a.mp3" } });
+  });
+
+  it("prefers image over file/video/audio", () => {
+    expect(buildSendInput({ image: "i", file: "f", video: "v", audio: "a" })).toEqual({
+      image: { source: "i" },
+    });
+  });
+
+  it("returns undefined when no media arg is present", () => {
+    expect(buildSendInput({ target: "t", text: "hi" })).toBeUndefined();
   });
 });
 
