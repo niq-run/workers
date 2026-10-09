@@ -3,70 +3,65 @@
 A **Feishu / Lark WebSocket bridge** for [niq](https://github.com/niq-run/niq).
 It listens for Feishu messages, forwards them to a bound **reason worker** as
 `worker.input` events, and pushes the reason worker's reply back into the
-Feishu chat. Chat → worker routing is persistent and reconfigurable at runtime
-(per-chat → default → fallback).
-
-Built on [`@niq.run/worker-sdk`](https://www.npmjs.com/package/@niq.run/worker-sdk).
-It is an out-of-process extension worker: it connects to a niq bus over
-HTTP + SSE and is meant to be launched by the niq project supervisor (or by you,
-for a standalone bridge).
-
-## Install
-
-```sh
-npm install -g @niq.run/lark-worker
-```
+Feishu chat (`lark.send`). Chat → worker routing is persistent and can be
+reconfigured at runtime (`lark.reason.*`). Built on
+[`@niq.run/worker-sdk`](https://www.npmjs.com/package/@niq.run/worker-sdk).
 
 ## Run
 
-The package ships a `niq-lark` bin (compiled app entry `dist/start.js`), so you
-can start it directly — with `npx` (no install needed):
-
 ```sh
-# npx — most convenient for launching, e.g. from a niq project's worker config
 npx @niq.run/lark-worker --reason-worker reason.sales
-
-# same thing once installed globally
-niq-lark --reason-worker reason.sales
-
-# or run it via node from a checkout
-node dist/start.js --reason-worker reason.sales
+# once installed: niq-lark --reason-worker reason.sales
 ```
 
-Connection to the bus comes from the environment the supervisor injects
-(`NIQ_BUS_URL`, `NIQ_WORKER_ID`, `NIQ_WORKER_CREDENTIAL`), so a niq project can
-spawn it with `npx @niq.run/lark-worker` and nothing else. CLI flags override
-the env.
+Bus connection comes from the supervisor-injected environment
+(`NIQ_BUS_URL`, `NIQ_WORKER_ID`, `NIQ_WORKER_CREDENTIAL`); the bound reason
+worker and per-chat routing come from env or flags (see Config). See
+[`start.ts`](src/start.ts) for the full flag list.
 
-## Configuration
+## Config
 
-| Purpose | Env | Flag |
-|---|---|---|
-| Feishu app id | `LARK_APP_ID` | `--app-id` |
-| Feishu app secret | `LARK_APP_SECRET` | `--app-secret` |
-| Feishu/Lark domain | `LARK_DOMAIN` | `--domain` |
-| Proactive message recipient | `LARK_DEFAULT_USER_ID` | `--default-user` |
-| **Default reason worker** | `NIQ_REASON_WORKER` | `--reason-worker` |
-| **Fallback reason worker** | `LARK_FALLBACK_REASON_WORKER` | `--fallback-reason-worker` |
-| **Per-chat routing** | `LARK_REASON_WORKER_MAPPINGS` | `--reason-mappings` |
-| Persisted routing state | `LARK_STATE_FILE` | `--state-file` |
+| Purpose | Env | Flag | Default |
+|---|---|---|---|
+| Bus base URL | `NIQ_BUS_URL` | `--bus-url` | — |
+| Bus worker id | `NIQ_WORKER_ID` | `--worker-id` | — |
+| Bus credential | `NIQ_WORKER_CREDENTIAL` | `--credential` | — |
+| Feishu app id | `LARK_APP_ID` | `--app-id` | _(required)_ |
+| Feishu app secret | `LARK_APP_SECRET` | `--app-secret` | _(required)_ |
+| Feishu/Lark domain | `LARK_DOMAIN` | `--domain` | `https://open.feishu.cn` |
+| Proactive message recipient | `LARK_DEFAULT_USER_ID` | `--default-user` | — |
+| **Default reason worker** | `NIQ_REASON_WORKER` | `--reason-worker` | — |
+| **Fallback reason worker** | `LARK_FALLBACK_REASON_WORKER` | `--fallback-reason-worker` | — |
+| **Per-chat routing** | `LARK_REASON_WORKER_MAPPINGS` | `--reason-mappings` | `{}` |
+| Persisted routing state | `LARK_STATE_FILE` | `--state-file` | `./lark-reason-state.json` |
 
 At least one of the default or fallback reason worker must be configured.
-Run `niq-lark --help` for the full flag list.
+
+## Events
+
+### Handles (subscribes / answers)
+
+| Event | Payload | Reply |
+|---|---|---|
+| `lark.send` | `{ target: string, text: string }` | `request.completed` on send; `request.failed` if no target/text |
+| `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed`; `request.failed` on error |
+| `lark.reason.unset` | `{ chat_id?: string, fallback?: boolean }` | `request.completed`; `request.failed` on error |
+| `lark.reason.get` | `{}` | `request.completed` → routing JSON (`default`, `fallback`, `per_chat`) |
+
+### Publishes
+
+| Event | Payload | Destination |
+|---|---|---|
+| `worker.input` | `{ text, chat_id, sender_open_id, input_mode: "append" }` | bound reason worker (per-chat → default → fallback) |
+| `worker.ready` | `{ type: "lark", watch, publishes }` | broadcast (transient presence) |
+
+Routing resolution for each Feishu message: `per_chat[chat_id] ?? default(reason-worker) ?? fallback(fallback-reason-worker)`. Routing state is persisted to `LARK_STATE_FILE` across restarts.
 
 ## Usage in code
 
 ```ts
 import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 ```
-
-## Details
-
-The worker exposes a runtime routing API through the `lark.reason.*` extension
-group (`lark.reason.set` / `unset` / `get`), and persists its routing state to
-`LARK_STATE_FILE` (an atomic temp-file + rename JSON write, restored on start).
-The bridge forwards each Feishu message to exactly one reason worker,
-resolved per-chat → default → fallback.
 
 ## License
 
