@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Shipped as the binary `niq-lark` (@niq-ai/lark-worker). Entry point for
+ * Shipped as the binary `niq-lark` (@niq-run/lark-worker). Entry point for
  * running the Lark/Feishu worker as its own process (the "worker as an app"
  * model):
  *

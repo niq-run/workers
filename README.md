@@ -23,8 +23,8 @@ Flat, one directory per worker:
 workers/
 ├── package.json     # npm workspace root — an entry exists for each worker below
 ├── tsconfig.base.json
-├── hello/           # @niq-ai/hello-worker — minimal demo (bin: niq-hello)
-└── lark/            # @niq-ai/lark-worker  — Feishu WebSocket bridge (bin: niq-lark)
+├── hello/           # @niq-run/hello-worker — minimal demo (bin: niq-hello)
+└── lark/            # @niq-run/lark-worker  — Feishu WebSocket bridge (bin: niq-lark)
 ```
 
 - Each worker is an independent npm package with its own `bin`, e.g.
@@ -40,22 +40,22 @@ workers/
 ## Install
 
 ```sh
-npm install -g @niq-ai/hello-worker
-npm install -g @niq-ai/lark-worker
+npm install -g @niq-run/hello-worker
+npm install -g @niq-run/lark-worker
 ```
 
 Then run each worker's own launcher, or import it in code:
 
 ```ts
-import { LarkWorker, larkConfigFromEnv } from "@niq-ai/lark-worker";
+import { LarkWorker, larkConfigFromEnv } from "@niq-run/lark-worker";
 ```
 
 ## Current workers
 
 | Package | Launcher | Description |
 |---|---|---|
-| `@niq-ai/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
-| `@niq-ai/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`lark/src/README.md`](lark/src/README.md) |
+| `@niq-run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
+| `@niq-run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat. See [`lark/src/README.md`](lark/src/README.md) |
 
 ## Add a worker
 

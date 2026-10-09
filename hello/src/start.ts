@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Shipped as the binary `niq-hello` (@niq-ai/hello-worker). Entry point for
+ * Shipped as the binary `niq-hello` (@niq-run/hello-worker). Entry point for
  * running the hello worker as its own process (the "worker as an app" model):
  *
  *   node dist/start.js [--key value ...]

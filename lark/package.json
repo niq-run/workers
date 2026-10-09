@@ -1,5 +1,5 @@
 {
-  "name": "@niq-ai/lark-worker",
+  "name": "@niq-run/lark-worker",
   "version": "0.1.0",
   "description": "Feishu/Lark WebSocket bridge Worker for niq — forwards Feishu messages to a bound reason worker and pushes its replies back. Built on @niq.run/worker-sdk.",
   "type": "module",
