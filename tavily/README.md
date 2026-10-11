@@ -27,7 +27,8 @@ comes from `TAVILY_API_KEY`. CLI flags override env. See
 | Bus worker id | `NIQ_WORKER_ID` | `--worker-id` | — |
 | Bus credential | `NIQ_WORKER_CREDENTIAL` | `--credential` | — |
 | Tavily API key | `TAVILY_API_KEY` | `--api-key` | _(required)_ |
-| Event type to answer | — | `--search-event-type` | `tavily.search` |
+| Event type to answer (search) | — | `--search-event-type` | `tavily.search` |
+| Event type to answer (extract) | — | `--extract-event-type` | `tavily.extract` |
 | Default max results | — | `--max-results` | `5` |
 
 ## Events
@@ -42,6 +43,15 @@ Payload fields mapped to Tavily search options: `maxResults`, `days`,
 `maxTokens`, `maxAgeHours`, `searchDepth`, `topic`, `timeRange`, `country`,
 `language`, `includeAnswer`, `includeImages`, `includeRawContent`,
 `includeDomains`, `excludeDomains`.
+
+| Event | Payload | Reply |
+|---|---|---|
+| `tavily.extract` | `{ url: string, ...options }` | `request.completed` → `{ result: "# title + page content" }`; `request.failed` if `url` missing or Tavily errors |
+
+`tavily.extract` payload fields mapped to Tavily extract options: `format`
+(`markdown` \| `text`), `extractDepth` (`basic` \| `advanced`),
+`includeImages`, `includeFavicon`, `includeUsage`. Content is capped per
+reply.
 
 ### Publishes
 

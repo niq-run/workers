@@ -28,6 +28,7 @@ function usage(): void {
       "  --credential <cred>     bus credential (else NIQ_WORKER_CREDENTIAL)\n" +
       "  --api-key <key>         Tavily API key (else TAVILY_API_KEY)\n" +
       "  --search-event-type <t> event type to answer (default: tavily.search)\n" +
+      "  --extract-event-type <t> event type for URL extraction (default: tavily.extract)\n" +
       "  --max-results <n>       default max results (default: 5)",
   );
 }
@@ -50,6 +51,9 @@ await runWorkerApp(async () => {
     ...(opts["api-key"] !== undefined ? { apiKey: String(opts["api-key"]) } : {}),
     ...(opts["search-event-type"] !== undefined
       ? { searchEventType: String(opts["search-event-type"]) }
+      : {}),
+    ...(opts["extract-event-type"] !== undefined
+      ? { extractEventType: String(opts["extract-event-type"]) }
       : {}),
     ...(maxResults !== undefined && Number.isFinite(maxResults)
       ? { defaultSearchOptions: { maxResults } }

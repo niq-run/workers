@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { TavilyClient, TavilySearchOptions, TavilySearchResponse } from "@tavily/core";
-import { searchOptionsFrom, TavilyWorker } from "./worker.js";
+import type { TavilyClient, TavilyExtractOptions, TavilyExtractResponse, TavilySearchOptions, TavilySearchResponse } from "@tavily/core";
+import { extractOptionsFrom, searchOptionsFrom, TavilyWorker } from "./worker.js";
 
 interface RecordedPublish {
   url: string;
@@ -38,6 +38,25 @@ function stubClient(
     return { ...baseResp, ...resp };
   });
   return { search } as unknown as TavilyClient & { search: ReturnType<typeof vi.fn> };
+}
+
+const baseExtractResp: TavilyExtractResponse = {
+  results: [{ url: "https://u", title: "Article Title", rawContent: "Extracted body text." }],
+  failedResults: [],
+  responseTime: 1,
+  requestId: "e1",
+};
+
+/** Stub Tavily client for tests exercising extract(). */
+function stubExtractClient(
+  resp: Partial<TavilyExtractResponse> = {},
+  error?: Error,
+): TavilyClient & { extract: ReturnType<typeof vi.fn> } {
+  const extract = vi.fn(async (_urls: string[], _opts?: TavilyExtractOptions) => {
+    if (error) throw error;
+    return { ...baseExtractResp, ...resp };
+  });
+  return { extract } as unknown as TavilyClient & { extract: ReturnType<typeof vi.fn> };
 }
 
 /** Build a fake fetch that serves one SSE event then closes, recording publishes. */
@@ -188,6 +207,65 @@ describe("searchOptionsFrom", () => {
     expect(opts.topic).toBe("news");
     expect(opts.includeAnswer).toBe(true);
     expect(opts.includeDomains).toEqual(["example.com"]);
+    expect((opts as Record<string, unknown>).bogus).toBeUndefined();
+  });
+});
+
+describe("TavilyWorker extract", () => {
+  it("answers a tavily.extract request with title + content", async () => {
+    const client = stubExtractClient() as TavilyClient;
+    const { fetchImpl, publishes } = fakeBus("tavily.extract", { url: "https://u" }, "req-x1");
+    const worker = makeWorker(fetchImpl, client);
+
+    await worker.run();
+    await worker.close();
+
+    expect(client.extract).toHaveBeenCalledWith(["https://u"], expect.anything());
+    const reply = publishes.find((p) => p.body.type === "send")?.body.events[0];
+    expect(reply?.type).toBe("request.completed");
+    expect(String(reply?.payload.result)).toContain("Article Title");
+    expect(String(reply?.payload.result)).toContain("Extracted body");
+  });
+
+  it("replies request.failed when url is missing", async () => {
+    const client = stubExtractClient() as TavilyClient;
+    const { fetchImpl, publishes } = fakeBus("tavily.extract", {}, "req-x2");
+    const worker = makeWorker(fetchImpl, client);
+
+    await worker.run();
+    await worker.close();
+
+    expect(client.extract).not.toHaveBeenCalled();
+    const reply = publishes.find((p) => p.body.type === "send")?.body.events[0];
+    expect(reply?.type).toBe("request.failed");
+    expect(String(reply?.payload.error)).toContain("url is required");
+  });
+
+  it("replies request.failed when the Tavily extract errors", async () => {
+    const client = stubExtractClient({}, new Error("extract boom")) as TavilyClient;
+    const { fetchImpl, publishes } = fakeBus("tavily.extract", { url: "https://u" }, "req-x3");
+    const worker = makeWorker(fetchImpl, client);
+
+    await worker.run();
+    await worker.close();
+
+    const reply = publishes.find((p) => p.body.type === "send")?.body.events[0];
+    expect(reply?.type).toBe("request.failed");
+    expect(String(reply?.payload.error)).toContain("extract boom");
+  });
+});
+
+describe("extractOptionsFrom", () => {
+  it("maps format/extractDepth strings and the includeImages boolean", () => {
+    const opts = extractOptionsFrom({
+      format: "markdown",
+      extractDepth: "advanced",
+      includeImages: true,
+      bogus: 1,
+    });
+    expect(opts.format).toBe("markdown");
+    expect(opts.extractDepth).toBe("advanced");
+    expect(opts.includeImages).toBe(true);
     expect((opts as Record<string, unknown>).bogus).toBeUndefined();
   });
 });
