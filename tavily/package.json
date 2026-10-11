@@ -1,6 +1,6 @@
 {
   "name": "@niq.run/tavily-worker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tavily web-search Worker for niq — answers tavily.search requests with the answer + top sources. Built on @niq.run/worker-sdk.",
   "type": "module",
   "main": "./dist/worker.js",
