@@ -11,12 +11,13 @@
   "main": "./dist/worker.js",
   "types": "./dist/worker.d.ts",
   "bin": {
-    "niq-lark": "./dist/start.js"
+    "niq-lark": "dist/start.js"
   },
   "files": [
     "dist"
   ],
   "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
   "sideEffects": false,
