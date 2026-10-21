@@ -34,6 +34,9 @@ env. See [`start.ts`](src/start.ts) for the full flag list.
 |---|---|---|
 | `hello.greet` | `{ name?: string }` | `request.completed` → `{ result: "hello, <name \| world>!" }` |
 
+Schemas are TypeBox (`@sinclair/typebox`) and are announced in `worker.ready`, so
+`parameters` and `response` are visible to peers.
+
 ### Publishes
 
 | Event | Payload | Destination |

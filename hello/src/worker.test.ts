@@ -146,6 +146,20 @@ describe("HelloWorker", () => {
         {
           event: "hello.greet",
           desc: "Greets the name in the payload (default: world).",
+          parameters: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description:
+                  "Name to greet (falls back to the worker's default name)",
+              },
+            },
+          },
+          response: {
+            type: "string",
+            description: 'Greeting text, e.g. "hello, world!"',
+          },
         },
       ],
     });

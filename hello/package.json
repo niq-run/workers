@@ -22,7 +22,8 @@
     "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
   },
   "dependencies": {
-    "@niq.run/worker-sdk": "*"
+    "@niq.run/worker-sdk": "*",
+    "@sinclair/typebox": "^0.34.52"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

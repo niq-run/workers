@@ -6,6 +6,7 @@
  * the extension registry + reply plumbing pattern: register what you respond
  * to, announce yourself, dispatch the event loop.
  */
+import { Type } from "@sinclair/typebox";
 import {
   BaseWorker,
   EventType,
@@ -72,6 +73,14 @@ export class HelloWorker {
       {
         event: this.greetType,
         description: "Greets the name in the payload (default: world).",
+        parameters: Type.Object({
+          name: Type.Optional(Type.String({
+            description: "Name to greet (falls back to the worker's default name)",
+          })),
+        }),
+        response: Type.String({
+          description: 'Greeting text, e.g. "hello, world!"',
+        }),
       },
       (evt) => this.handleGreet(evt),
     );
