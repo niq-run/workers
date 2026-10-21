@@ -39,6 +39,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createLarkChannel } from "@larksuite/channel";
+import { Type } from "@sinclair/typebox";
 import type {
   LarkChannelOptions,
   NormalizedMessage,
@@ -54,6 +55,22 @@ import {
   type Event,
   type WorkerSideChannel,
 } from "@niq.run/worker-sdk";
+
+// ── schema fragments ──
+//
+// Declared once and reused: the media arguments mean the same thing everywhere,
+// and a tool that returns a media id reports the same shape. TypeBox schemas are
+// plain JSON Schema, so they ride worker.ready unchanged.
+
+const LarkSendTarget = Type.String({
+  description: "Feishu chat_id, open_id, or user_id of the recipient",
+});
+const LarkMediaSource = Type.String({
+  description: "http(s) URL or local file path of the media to send",
+});
+const LarkFileSource = Type.String({
+  description: "http(s) URL or local file path to send as a file attachment",
+});
 
 /** Minimal surface of `@larksuite/channel` this worker uses. Injectable for tests. */
 export interface LarkChannel {
@@ -364,30 +381,16 @@ export class LarkWorker {
         event: LARK_SEND_EVENT,
         description:
           "Send a message to a Feishu user or chat. Provide target (chat_id, open_id, or user_id) and either text or a media source (http(s) URL or local file path): image, file (+file_name), video, or audio. Without a media source it sends text (append-merged across repeated sends).",
-        parameters: {
-          type: "object",
-          properties: {
-            target: {
-              type: "string",
-              description: "Feishu chat_id, open_id, or user_id of the recipient",
-            },
-            text: { type: "string", description: "Message text (used when no media arg is present)" },
-            image: {
-              type: "string",
-              description: "http(s) URL or local file path of an image to send",
-            },
-            file: {
-              type: "string",
-              description: "http(s) URL or local file path to send as a file attachment",
-            },
-            file_name: {
-              type: "string",
-              description: "Display file name (required for file; defaults to the URL basename)",
-            },
-            video: { type: "string", description: "http(s) URL or local file path of a video to send" },
-            audio: { type: "string", description: "http(s) URL or local file path of an audio to send" },
-          },
-        },
+        parameters: Type.Object({
+          target: Type.Optional(LarkSendTarget),
+          text: Type.Optional(Type.String({ description: "Message text (used when no media arg is present)" })),
+          image: Type.Optional(LarkMediaSource),
+          file: Type.Optional(LarkFileSource),
+          file_name: Type.Optional(Type.String({ description: "Display file name (defaults to the URL basename)" })),
+          video: Type.Optional(LarkMediaSource),
+          audio: Type.Optional(LarkMediaSource),
+        }),
+        response: Type.String({ description: '"sent" once the message was accepted by Feishu' }),
       },
       (evt) => this.handleLarkSend(evt),
     );
@@ -401,23 +404,18 @@ export class LarkWorker {
           "Route a Feishu chat to a reason worker, set the default, or set the fallback. " +
           "Provide worker_id. Include chat_id to route only that chat; include fallback=true " +
           "(no chat_id) to set the last-resort fallback; otherwise the default reason worker is set.",
-        parameters: {
-          type: "object",
-          properties: {
-            chat_id: {
-              type: "string",
-              description: "Feishu chat_id to route (omit to set the default or fallback)",
-            },
-            worker_id: {
-              type: "string",
-              description: "Reason worker id to route matching messages to",
-            },
-            fallback: {
-              type: "boolean",
-              description: "Set the last-resort fallback reason worker instead of the default (ignored when chat_id is given)",
-            },
-          },
-        },
+        parameters: Type.Object({
+          chat_id: Type.Optional(Type.String({
+            description: "Feishu chat_id to route (omit to set the default or fallback)",
+          })),
+          worker_id: Type.String({
+            description: "Reason worker id to route matching messages to",
+          }),
+          fallback: Type.Optional(Type.Boolean({
+            description: "Set the last-resort fallback reason worker instead of the default (ignored when chat_id is given)",
+          })),
+        }),
+        response: Type.String({ description: '"ok" once the routing change is persisted' }),
       },
       (evt) => this.handleReasonSet(evt),
     );
@@ -428,19 +426,15 @@ export class LarkWorker {
           "Stop routing a Feishu chat to its own reason worker and fall back to the default, " +
           "or clear the fallback. Provide chat_id to drop a chat override; include fallback=true " +
           "(chat_id optional) to clear the fallback.",
-        parameters: {
-          type: "object",
-          properties: {
-            chat_id: {
-              type: "string",
-              description: "Feishu chat_id to stop overriding, falling back to the default",
-            },
-            fallback: {
-              type: "boolean",
-              description: "Clear the fallback reason worker",
-            },
-          },
-        },
+        parameters: Type.Object({
+          chat_id: Type.Optional(Type.String({
+            description: "Feishu chat_id to stop overriding, falling back to the default",
+          })),
+          fallback: Type.Optional(Type.Boolean({
+            description: "Clear the fallback reason worker",
+          })),
+        }),
+        response: Type.String({ description: '"ok" once the routing change is persisted' }),
       },
       (evt) => this.handleReasonUnset(evt),
     );
@@ -449,6 +443,14 @@ export class LarkWorker {
         event: LARK_REASON_GET,
         description:
           "Return the current chat → reason worker routing (default + per-chat overrides).",
+        parameters: Type.Object({}),
+        response: Type.Object({
+          default_reason_worker: Type.String(),
+          fallback_reason_worker: Type.String(),
+          per_chat: Type.Record(Type.String(), Type.String(), {
+            description: "chat_id → reason worker id overrides",
+          }),
+        }),
       },
       (evt) => this.handleReasonGet(evt),
     );
@@ -831,12 +833,18 @@ export class LarkWorker {
   /** Serve the `lark.reason.get` extension: return the current routing as JSON. */
   private async handleReasonGet(evt: Event): Promise<void> {
     const tc = parseToolCall(evt);
-    const result = JSON.stringify({
-      default_reason_worker: this.defaultReasonWorker,
-      fallback_reason_worker: this.fallbackReasonWorker,
-      per_chat: Object.fromEntries(this.perChat),
-    });
-    await this.base.replyCompleted(tc.callerID, tc.callID, result, tc.traceID);
+    // Structured reply: the object IS the payload, so a caller (or a PTC script)
+    // reads the fields instead of parsing a JSON string.
+    await this.base.replyCompleted(
+      tc.callerID,
+      tc.callID,
+      {
+        default_reason_worker: this.defaultReasonWorker,
+        fallback_reason_worker: this.fallbackReasonWorker,
+        per_chat: Object.fromEntries(this.perChat),
+      },
+      tc.traceID,
+    );
     this.logger.info(
       `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
     );

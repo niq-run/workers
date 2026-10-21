@@ -43,10 +43,14 @@ At least one of the default or fallback reason worker must be configured.
 
 | Event | Payload | Reply |
 |---|---|---|
-| `lark.send` | `{ target?, text? }` — or one of `image` / `file` / `video` / `audio` (http(s) URL or local path; `file` takes `file_name`) to send media | `request.completed` on send; `request.failed` if no target / no text or media / send error |
-| `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed`; `request.failed` on error |
-| `lark.reason.unset` | `{ chat_id?: string, fallback?: boolean }` | `request.completed`; `request.failed` on error |
-| `lark.reason.get` | `{}` | `request.completed` → routing JSON (`default`, `fallback`, `per_chat`) |
+| `lark.send` | `{ target?, text? }` — or one of `image` / `file` / `video` / `audio` (http(s) URL or local path; `file` takes `file_name`) to send media | `request.completed` → `"sent"`; `request.failed` if no target / no text or media / send error |
+| `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
+| `lark.reason.unset` | `{ chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
+| `lark.reason.get` | `{}` | `request.completed` → `{ default_reason_worker, fallback_reason_worker, per_chat }` (a structured object, not a JSON string) |
+
+Schemas are TypeBox (`@sinclair/typebox`) and are announced in `worker.ready`, so
+`parameters` and `response` are visible to peers — `directory.get_worker_info`
+shows both, and a PTC script can plan its parse from `response`.
 
 ### Publishes
 

@@ -580,7 +580,8 @@ describe("LarkWorker", () => {
 
     const reply = sent[sent.length - 1];
     expect(reply.evt.type).toBe("request.completed");
-    expect(JSON.parse(reply.evt.payload.result as string)).toEqual({
+    // A structured reply IS the payload: no result wrapper, no JSON string.
+    expect(reply.evt.payload).toEqual({
       default_reason_worker: "reason.0",
       fallback_reason_worker: "",
       per_chat: { oc_x: "reason.5" },
