@@ -208,6 +208,80 @@ describe("LarkWorker", () => {
       type: "lark",
     });
     expect(ready.exclude_worker_id).toBe("lark@me");
+
+    // The announced contract: every tool with its argument schema, and the
+    // reply shape (reason.get's is a structured object, not a JSON string).
+    const watch = ready.payload.watch as Array<Record<string, any>>;
+    expect(watch.map((w) => w.event)).toEqual([
+      "lark.send",
+      "lark.reason.set",
+      "lark.reason.unset",
+      "lark.reason.get",
+    ]);
+    for (const entry of watch) {
+      expect(entry.parameters).toMatchObject({ type: "object" });
+      expect(entry.response).toBeDefined();
+    }
+    const reasonGet = watch.find((w) => w.event === "lark.reason.get")!;
+    expect(reasonGet.response).toMatchObject({
+      type: "object",
+      properties: {
+        default_reason_worker: { type: "string" },
+        fallback_reason_worker: { type: "string" },
+        per_chat: { type: "object" },
+      },
+    });
+  });
+
+  it("answers worker.discover with a directed worker.ready to the asker", async () => {
+    const { bus, sink, sent, broadcasts } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d1",
+      type: "worker.discover",
+      status: "created",
+      payload: {},
+      worker_id: "webui-hiw",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent.find((s) => s.evt.type === "worker.ready");
+    expect(reply).toBeDefined();
+    expect(reply!.targets).toEqual(["webui-hiw"]);
+    expect(reply!.evt.transient).toBe(true);
+    const watch = reply!.evt.payload.watch as Array<Record<string, any>>;
+    expect(watch.map((w) => w.event)).toContain("lark.send");
+    // Discovery is answered directly; it is not re-broadcast.
+    expect(broadcasts.filter((b) => b.type === "worker.ready")).toHaveLength(1);
+
+    sink.end();
+    await running;
+  });
+
+  it("does not answer its own worker.discover", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d2",
+      type: "worker.discover",
+      status: "created",
+      payload: {},
+      worker_id: "lark@me",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(sent.filter((s) => s.evt.type === "worker.ready")).toHaveLength(0);
+
+    sink.end();
+    await running;
   });
 
   it("delivers a lark.send with no target to the configured default user", async () => {

@@ -369,6 +369,9 @@ export class LarkWorker {
         { type: LARK_REASON_SET },
         { type: LARK_REASON_UNSET },
         { type: LARK_REASON_GET },
+        // A peer (or the WebUI) asking who is online. Presence is live-only and
+        // not persisted, so a late subscriber learns the contract by asking.
+        { type: EventType.WorkerDiscover },
       ],
       channel: this.bus,
     });
@@ -509,20 +512,13 @@ export class LarkWorker {
     this.logger.info(
       `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name}`,
     );
-    // Presence is live-only, not durable history. The SDK's announceReady would
-    // persist this worker.ready into the project event store (it sets no
-    // transient flag); a presence stalling the durable log is noise. Broadcast
-    // a transient ready instead so lark's presence never lands in events.db.
-    const ready = createEvent(EventType.WorkerReady, {
-      type: "lark",
-      watch: this.base.watchEntries(false),
-      publishes: [
-        { type: "worker.input", description: "Feishu messages forwarded to reason" },
-      ],
-    });
-    ready.transient = true; // presence: live-only, not durable history
-    ready.exclude_worker_id = this.workerID;
-    await this.base.channel.broadcast(ready);
+    // Presence is live-only (the SDK marks worker.ready transient and excludes
+    // this worker from its own broadcast). The SDK also remembers this contract
+    // and answers worker.discover with it, so peers and the WebUI can learn the
+    // tools on demand.
+    await this.base.announceReady("lark", [
+      { type: "worker.input", description: "Feishu messages forwarded to reason" },
+    ]);
     this.logger.info(`[${NS}] announced worker.ready (transient)`);
   }
 
@@ -533,7 +529,7 @@ export class LarkWorker {
     // to lark that way. Replies arrive only via the `lark.send` extension, and
     // routing is managed via the `lark.reason.*` extensions; every event is
     // dispatched to the registered extension handlers (unknown events are
-    // ignored).
+    // ignored). `worker.discover` is protocol traffic, answered by BaseWorker.
     for await (const evt of this.bus.events()) {
       this.base.dispatchExtension(evt);
     }

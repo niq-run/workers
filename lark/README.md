@@ -52,6 +52,11 @@ Schemas are TypeBox (`@sinclair/typebox`) and are announced in `worker.ready`, s
 `parameters` and `response` are visible to peers — `directory.get_worker_info`
 shows both, and a PTC script can plan its parse from `response`.
 
+`worker.discover` is protocol traffic rather than a tool: lark answers it with a
+directed, transient `worker.ready` carrying this contract. Presence is not
+persisted, so a peer that starts later (or the WebUI, which asks on demand) still
+learns lark's tools.
+
 ### Publishes
 
 | Event | Payload | Destination |
