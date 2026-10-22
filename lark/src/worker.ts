@@ -292,13 +292,13 @@ const NS = "lark";
 
 /**
  * The extension lark exposes to peers (reason) for sending a Feishu message to
- * a user/chat. Non-SelfOnly so it is discovered by reason and callable.
+ * a user/chat. Advertised so it is discovered by reason and callable.
  */
 export const LARK_SEND_EVENT = "lark.send";
 
 /**
  * The group of extensions lark exposes for managing the chat → reason worker
- * routing at runtime. All are non-SelfOnly so a control plane / admin peer can
+ * routing at runtime. All are advertised so a control plane / admin peer can
  * discover and call them. Each mutation also persists the new routing.
  */
 
@@ -377,7 +377,7 @@ export class LarkWorker {
     });
 
     // Expose a peer-callable extension so reason can send Feishu messages with
-    // an explicit target (chat_id / open_id / user_id). Non-SelfOnly so it is
+    // an explicit target (chat_id / open_id / user_id). Advertised so it is
     // discovered by reason and invoked via the tool-name bridge.
     this.base.register(
       {
