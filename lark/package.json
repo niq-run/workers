@@ -1,6 +1,6 @@
 {
   "name": "@niq.run/lark-worker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Feishu/Lark WebSocket bridge Worker for niq — forwards Feishu messages to a bound reason worker and pushes its replies back. Built on @niq.run/worker-sdk.",
   "repository": {
     "type": "git",
@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@larksuite/channel": "^0.6.0",
-    "@niq.run/worker-sdk": "^0.7.0",
+    "@niq.run/worker-sdk": "^0.8.0",
     "@sinclair/typebox": "^0.34.52"
   },
   "devDependencies": {

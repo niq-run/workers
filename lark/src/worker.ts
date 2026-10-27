@@ -392,9 +392,12 @@ const NS = "lark";
 
 /**
  * Ask lark to describe itself — the generic "skill card" event every worker may
- * serve. Mirrors Go `baseworker.RegisterReadme`; the TS SDK has no helper yet.
+ * serve. Provided by the SDK now (`EventType.WorkerReadme`); kept as an alias
+ * for consumers of this package.
+ *
+ * @deprecated use `EventType.WorkerReadme` from `@niq.run/worker-sdk`.
  */
-export const WORKER_README = "worker.readme";
+export const WORKER_README = EventType.WorkerReadme;
 
 /**
  * The extension lark exposes to peers (reason) for sending a Feishu message to
@@ -521,7 +524,8 @@ export class LarkWorker {
     this.base = new BaseWorker({
       id: this.workerID,
       subscriptions: [
-        { type: WORKER_README },
+        { type: EventType.WorkerReadme },
+        { type: EventType.WorkerHelp },
         { type: LARK_REASON_SET },
         { type: LARK_REASON_GET },
         { type: LARK_DIRS_ADD },
@@ -533,19 +537,14 @@ export class LarkWorker {
       channel: this.bus,
     });
 
-    // Self-description: the generic worker.readme read capability, so peers and
-    // the WebUI can learn what lark does and how to call it (the TS SDK has no
-    // RegisterReadme helper; this is the same contract).
-    this.base.register(
-      {
-        event: WORKER_README,
-        description:
-          "Read this worker's usage guide: the Feishu bridge, its events, local-file sending and approval gating.",
-        parameters: Type.Object({}),
-        response: Type.String({ description: "the worker's self-description (its readme text)" }),
-      },
-      (evt) => this.handleReadme(evt),
+    // Self-description and per-event help from the SDK: worker.readme returns
+    // this worker's guide (live, because the text runs per request) and
+    // worker.help renders the declared contracts, like a CLI's -h.
+    this.base.registerReadme(
+      "Read this worker's usage guide: the Feishu bridge, its events, local-file sending and approval gating.",
+      () => this.renderReadme(),
     );
+    this.base.registerHelp();
 
     // Expose a peer-callable extension so reason can send Feishu messages with
     // an explicit target (chat_id / open_id / user_id). Advertised so it is
@@ -1039,22 +1038,9 @@ export class LarkWorker {
   }
 
   /**
-   * Serve `worker.readme`: the static guide plus a live "Current" section
-   * (routing, allowlist, approver), mirroring the Go workers' readme.
+   * The guide `worker.readme` returns (the SDK's registerReadme calls this per
+   * request): the static guide plus live state — routing, allowlist, approver.
    */
-  private async handleReadme(evt: Event): Promise<void> {
-    const tc = parseToolCall(evt);
-    if (!tc.callID) return; // a notification, not a request to answer
-    await this.base.replyCompleted(
-      tc.callerID,
-      tc.callID,
-      this.renderReadme(),
-      tc.traceID,
-    );
-    this.logger.info(`[${NS}] worker.readme → ${tc.callerID}`);
-  }
-
-  /** The guide with the state that only exists at runtime. */
   private renderReadme(): string {
     const dirs = this.allowedFileDirs.length
       ? this.allowedFileDirs.join(", ")

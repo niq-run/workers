@@ -274,6 +274,7 @@ describe("LarkWorker", () => {
     const watch = ready.payload.watch as Array<Record<string, any>>;
     expect(watch.map((w) => w.event)).toEqual([
       "worker.readme",
+      "worker.help",
       "lark.send",
       "lark.reason.set",
       "lark.reason.get",
@@ -328,6 +329,99 @@ describe("LarkWorker", () => {
     expect(text).toContain("local-file dirs: /data/out");
     expect(text).toContain("per-chat overrides: 1");
     expect(text).toContain(`approver: ${DEFAULT_APPROVER}`);
+
+    sink.end();
+    await running;
+  });
+
+  it("answers worker.help with the event index when event_name is omitted", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "h1",
+      type: "worker.help",
+      status: "created",
+      payload: {},
+      worker_id: "reason.0",
+      request_id: "call-help",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-help");
+    const text = (reply.evt.payload as any).result as string;
+    expect(text).toContain("# lark@me — help");
+    for (const name of [
+      "worker.readme",
+      "worker.help",
+      "lark.send",
+      "lark.reason.set",
+      "lark.reason.get",
+      "lark.dirs.add",
+      "lark.dirs.get",
+    ]) {
+      expect(text).toContain(`\`${name}\``);
+    }
+
+    sink.end();
+    await running;
+  });
+
+  it("answers worker.help for one event from its declared contract", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "h2",
+      type: "worker.help",
+      status: "created",
+      payload: { event_name: "lark.send" },
+      worker_id: "reason.0",
+      request_id: "call-help-send",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.completed");
+    const text = (reply.evt.payload as any).result as string;
+    expect(text).toContain("# lark.send");
+    expect(text).toContain("## Arguments");
+    expect(text).toContain("## Reply");
+    expect(text).toContain("target");
+    expect(text).toContain("file_name");
+
+    sink.end();
+    await running;
+  });
+
+  it("fails worker.help for an event this worker does not serve", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "h3",
+      type: "worker.help",
+      status: "created",
+      payload: { event_name: "nope" },
+      worker_id: "reason.0",
+      request_id: "call-help-nope",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.failed");
+    expect(JSON.stringify(reply.evt.payload)).toContain("does not serve event");
 
     sink.end();
     await running;
