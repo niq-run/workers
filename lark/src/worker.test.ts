@@ -7,6 +7,7 @@ import {
   LARK_REASON_GET,
   LARK_DIRS_ADD,
   LARK_DIRS_GET,
+  WORKER_README,
   DEFAULT_APPROVER,
   buildSendInput,
   type LarkChannel,
@@ -272,6 +273,7 @@ describe("LarkWorker", () => {
     // reply shape (reason.get's is a structured object, not a JSON string).
     const watch = ready.payload.watch as Array<Record<string, any>>;
     expect(watch.map((w) => w.event)).toEqual([
+      "worker.readme",
       "lark.send",
       "lark.reason.set",
       "lark.reason.get",
@@ -291,6 +293,44 @@ describe("LarkWorker", () => {
         per_chat: { type: "object" },
       },
     });
+  });
+
+  it("answers worker.readme with the guide and live state", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({
+      bus,
+      allowedFileDirs: ["/data/out"],
+      reasonWorkerMappings: { oc_x: "reason.5" },
+    });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "rd1",
+      type: WORKER_README,
+      status: "created",
+      payload: {},
+      worker_id: "reason.0",
+      request_id: "call-readme",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-readme");
+    expect(reply.targets).toEqual(["reason.0"]);
+    // A string reply travels under `result`, like every non-object reply.
+    const text = (reply.evt.payload as any).result as string;
+    expect(text).toContain("# lark");
+    expect(text).toContain("lark.send");
+    expect(text).toContain("lark.dirs.add");
+    expect(text).toContain("local-file dirs: /data/out");
+    expect(text).toContain("per-chat overrides: 1");
+    expect(text).toContain(`approver: ${DEFAULT_APPROVER}`);
+
+    sink.end();
+    await running;
   });
 
   it("answers worker.discover with a directed worker.ready to the asker", async () => {

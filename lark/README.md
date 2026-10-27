@@ -97,6 +97,7 @@ lark.dirs.add { path: "/var/niq/outbox2" }
 
 | Event | Payload | Reply |
 |---|---|---|
+| `worker.readme` | `{}` | `request.completed` → the usage guide (including live routing/allowlist state) |
 | `lark.send` | `{ target?, text? }` — or one of `image` / `file` / `video` / `audio` (http(s) URL or local path; `file` takes `file_name`) to send media | `request.completed` → `"sent"`; `request.failed` if no target / no text or media / send error |
 | `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
 | `lark.reason.get` | `{}` | `request.completed` → `{ default_reason_worker, fallback_reason_worker, per_chat }` (a structured object, not a JSON string) |

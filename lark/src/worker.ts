@@ -283,6 +283,41 @@ piece. Keep your answer in the language the user wrote in, and do not preface it
 with any system notes.
 </system-reminder>`;
 
+/** The agent-facing guide `worker.readme` returns (live state is appended at reply time). */
+const LARK_README = `# lark — Feishu / Lark bridge
+
+Bridges the niq event bus to Feishu. Every Feishu message is forwarded to the
+chat's bound reason worker as worker.input { text, chat_id, sender_open_id,
+input_mode: "append" }, prefixed with a <system-reminder> naming the chat id and
+asking reason to answer with lark.send.
+
+## Tools
+
+- lark.send { target?, text? | image | file + file_name | video | audio } — send
+  text or media to a Feishu chat/user. target is a chat_id, open_id or user_id;
+  without one it falls back to the configured default user. Repeated text sends
+  to one target within a turn are appended into a single message.
+- lark.reason.set { worker_id, chat_id?, fallback? } — route a chat to a reason
+  worker, or set the default / last-resort fallback.
+- lark.reason.get {} — current routing: default_reason_worker,
+  fallback_reason_worker, per_chat.
+- lark.dirs.add { path } — allow local file media sends from an extra directory.
+  Only the approver's own request applies immediately; anyone else is parked
+  behind approval.request / approval.decision.
+- lark.dirs.get {} — the local-file allowlist and the configured approver.
+- worker.readme {} — this guide.
+
+## Notes
+
+- Local file media is default-deny: a path must resolve inside an allowlisted
+  directory (env LARK_ALLOWED_FILE_DIRS, or a runtime, approval-gated
+  lark.dirs.add). http(s) URL media needs no allowlist.
+- Approved additions persist in the state file and apply to the live channel
+  without a reconnect.
+- Routing and allowlist changes are persisted; there is no runtime unset.
+- Media sends always post a fresh message and reset text appending for that
+  target.`;
+
 /** Configuration for the assembled bridge. */
 export interface LarkBridgeOptions extends LarkConfig {
   /** Worker-side bus channel. Injected for tests; built from env otherwise. */
@@ -354,6 +389,12 @@ export interface LarkBridgeOptions extends LarkConfig {
 }
 
 const NS = "lark";
+
+/**
+ * Ask lark to describe itself — the generic "skill card" event every worker may
+ * serve. Mirrors Go `baseworker.RegisterReadme`; the TS SDK has no helper yet.
+ */
+export const WORKER_README = "worker.readme";
 
 /**
  * The extension lark exposes to peers (reason) for sending a Feishu message to
@@ -480,6 +521,7 @@ export class LarkWorker {
     this.base = new BaseWorker({
       id: this.workerID,
       subscriptions: [
+        { type: WORKER_README },
         { type: LARK_REASON_SET },
         { type: LARK_REASON_GET },
         { type: LARK_DIRS_ADD },
@@ -490,6 +532,20 @@ export class LarkWorker {
       ],
       channel: this.bus,
     });
+
+    // Self-description: the generic worker.readme read capability, so peers and
+    // the WebUI can learn what lark does and how to call it (the TS SDK has no
+    // RegisterReadme helper; this is the same contract).
+    this.base.register(
+      {
+        event: WORKER_README,
+        description:
+          "Read this worker's usage guide: the Feishu bridge, its events, local-file sending and approval gating.",
+        parameters: Type.Object({}),
+        response: Type.String({ description: "the worker's self-description (its readme text)" }),
+      },
+      (evt) => this.handleReadme(evt),
+    );
 
     // Expose a peer-callable extension so reason can send Feishu messages with
     // an explicit target (chat_id / open_id / user_id). Advertised so it is
@@ -979,6 +1035,37 @@ export class LarkWorker {
     );
     this.logger.info(
       `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
+    );
+  }
+
+  /**
+   * Serve `worker.readme`: the static guide plus a live "Current" section
+   * (routing, allowlist, approver), mirroring the Go workers' readme.
+   */
+  private async handleReadme(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    if (!tc.callID) return; // a notification, not a request to answer
+    await this.base.replyCompleted(
+      tc.callerID,
+      tc.callID,
+      this.renderReadme(),
+      tc.traceID,
+    );
+    this.logger.info(`[${NS}] worker.readme → ${tc.callerID}`);
+  }
+
+  /** The guide with the state that only exists at runtime. */
+  private renderReadme(): string {
+    const dirs = this.allowedFileDirs.length
+      ? this.allowedFileDirs.join(", ")
+      : "(none — local file sends are rejected)";
+    return (
+      `${LARK_README}\n\n## Current\n\n` +
+      `- default reason worker: ${this.defaultReasonWorker || "—"}\n` +
+      `- fallback reason worker: ${this.fallbackReasonWorker || "—"}\n` +
+      `- per-chat overrides: ${this.perChat.size}\n` +
+      `- local-file dirs: ${dirs}\n` +
+      `- approver: ${this.approver || "— (gating disabled)"}\n`
     );
   }
 
