@@ -25,6 +25,11 @@
  * args (project.json env). The default reason worker id comes from
  * `NIQ_REASON_WORKER`; an initial per-chat override map can come from
  * `LARK_REASON_WORKER_MAPPINGS` (a JSON object of {chat_id: worker_id}).
+ * Local-file media sends are default-deny in `@larksuite/channel`; opt in with
+ * `LARK_ALLOWED_FILE_DIRS` (comma-separated directories) — see
+ * {@link larkConfigFromEnv}. The allowlist can also be widened at runtime with
+ * `lark.dirs.add`, which is approval-gated on the configured approver worker
+ * (default `webui-hiw`) and persisted alongside the routing state.
  *
  * Routing (which reason worker a Feishu chat is forwarded to) is a mutable,
  * persisted property: configured on startup, updated at runtime via the
@@ -36,8 +41,9 @@
  * Both external sides sit behind narrow interfaces so tests run without real
  * Feishu credentials or a live bus.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
 import { createLarkChannel } from "@larksuite/channel";
 import { Type } from "@sinclair/typebox";
 import type {
@@ -53,6 +59,7 @@ import {
   EventType,
   parseToolCall,
   type Event,
+  type ToolCall,
   type WorkerSideChannel,
 } from "@niq.run/worker-sdk";
 
@@ -188,10 +195,46 @@ export interface LarkConfig {
   appSecret: string;
   /** Request domain, e.g. `https://open.feishu.cn` (default) or a Lark domain. */
   domain?: string;
-  /** Extra options forwarded to the channel (see {@link LarkChannelOptions}). */
+  /**
+   * Extra options forwarded to the channel (see {@link LarkChannelOptions}).
+   * Local file media sends need `outbound.allowedFileDirs` here; the env
+   * shortcut is `LARK_ALLOWED_FILE_DIRS`.
+   */
   channel?: Omit<LarkChannelOptions, "appId" | "appSecret" | "domain">;
   /** Injectable factory — defaults to {@link createLarkChannel}. */
   createChannel?: (opts: LarkChannelOptions) => LarkChannel;
+}
+
+/**
+ * Parse a comma-separated list of directories (e.g. `LARK_ALLOWED_FILE_DIRS`).
+ * Entries are trimmed and blanks dropped; an absent/empty value yields
+ * `undefined` so callers can distinguish "not configured" from an empty list.
+ */
+export function parseDirList(raw: string | undefined): string[] | undefined {
+  const dirs = (raw ?? "")
+    .split(",")
+    .map((d) => d.trim())
+    .filter((d) => d.length > 0);
+  return dirs.length > 0 ? dirs : undefined;
+}
+
+/**
+ * Normalize a directory for the local-file allowlist: expand a leading `~` and
+ * make it absolute (relative entries resolve against the worker's cwd, which is
+ * also what `@larksuite/channel` does when it checks containment).
+ */
+export function normalizeDirPath(raw: string): string {
+  const trimmed = raw.trim();
+  const expanded =
+    trimmed === "~" || trimmed.startsWith("~/")
+      ? homedir() + trimmed.slice(1)
+      : trimmed;
+  return resolve(expanded);
+}
+
+/** Order-preserving deduplication. */
+function dedupeDirs(dirs: readonly string[]): string[] {
+  return [...new Set(dirs)];
 }
 
 /** Build a {@link LarkConfig} from env. Throws naming any missing vars. */
@@ -201,6 +244,9 @@ export function larkConfigFromEnv(
   const appId = env.LARK_APP_ID?.trim() ?? "";
   const appSecret = env.LARK_APP_SECRET?.trim() ?? "";
   const domain = env.LARK_DOMAIN?.trim() || "https://open.feishu.cn";
+  const allowedFileDirs = parseDirList(env.LARK_ALLOWED_FILE_DIRS)?.map(
+    normalizeDirPath,
+  );
 
   const missing: string[] = [];
   if (!appId) missing.push("LARK_APP_ID");
@@ -212,7 +258,17 @@ export function larkConfigFromEnv(
         `started by the niq project supervisor.`,
     );
   }
-  return { appId, appSecret, domain };
+  // `@larksuite/channel` rejects local file media sources unless
+  // `outbound.allowedFileDirs` is configured (default-deny). Only add the
+  // channel block when the allowlist is actually set.
+  return {
+    appId,
+    appSecret,
+    domain,
+    ...(allowedFileDirs
+      ? { channel: { outbound: { allowedFileDirs } } }
+      : {}),
+  };
 }
 
 const DEFAULT_SYSTEM_REMINDER = `<system-reminder>
@@ -284,6 +340,15 @@ export interface LarkBridgeOptions extends LarkConfig {
    * starts a fresh target message. Defaults to `true`.
    */
   appendOutbound?: boolean;
+  /**
+   * Worker ID whose consent is required for runtime additions to the local-file
+   * allowlist (`lark.dirs.add`). A request from this worker applies directly;
+   * a request from any other worker is parked behind an `approval.request`
+   * until its `approval.decision` arrives. Defaults to `webui-hiw`, mirroring
+   * the workspace worker; an empty string disables gating (all adds apply
+   * immediately).
+   */
+  approver?: string;
   /** Where to send diagnostics. Defaults to `console`. */
   logger?: Logger;
 }
@@ -304,10 +369,35 @@ export const LARK_SEND_EVENT = "lark.send";
 
 /** Route a Feishu chat (or set the default) to a specific reason worker. */
 export const LARK_REASON_SET = "lark.reason.set";
-/** Stop routing a chat to its own worker; fall back to the default. */
-export const LARK_REASON_UNSET = "lark.reason.unset";
 /** Return the current routing (default + per-chat overrides). */
 export const LARK_REASON_GET = "lark.reason.get";
+
+/**
+ * The runtime local-file allowlist extensions. An addition is approval-gated
+ * and persisted, so a reason worker can widen the boundary without a restart.
+ * There is deliberately no remove/unset: narrowing stays a deploy-time choice.
+ */
+export const LARK_DIRS_ADD = "lark.dirs.add";
+export const LARK_DIRS_GET = "lark.dirs.get";
+
+/** Default approver for allowlist changes: the WebUI HIW owns approvals. */
+export const DEFAULT_APPROVER = "webui-hiw";
+
+/** Core approval protocol pair (mirrors `core/event` in the Go core). */
+export const APPROVAL_REQUEST = "approval.request";
+export const APPROVAL_DECISION = "approval.decision";
+
+/** The channel's outbound config, as forwarded to `@larksuite/channel`. */
+type ChannelOutbound = NonNullable<LarkChannelOptions["outbound"]>;
+
+/** A `lark.dirs.add` call parked behind the approver's decision. */
+interface PendingDirApproval {
+  path: string;
+  /** The caller whose request stays open until the verdict arrives. */
+  callerID: string;
+  callID: string;
+  traceID: string;
+}
 
 /**
  * The Feishu ⇄ reason bridge. Connect both sides, then forward Feishu
@@ -334,6 +424,18 @@ export class LarkWorker {
     string,
     { messageId: string; text: string }
   >();
+  /**
+   * The outbound config handed to the channel. Held (and mutated) by reference
+   * because the SDK's media uploader reads `allowedFileDirs` from this exact
+   * object on every send — a runtime addition then applies to the live channel.
+   */
+  private readonly outboundConfig: ChannelOutbound;
+  /** Directories local file media sends may read from (empty ⇒ SDK rejects them). */
+  private allowedFileDirs: string[];
+  /** Approver for allowlist changes; "" disables the approval gate. */
+  private readonly approver: string;
+  /** approval request id → the parked `lark.dirs.add` awaiting a verdict. */
+  private readonly pendingDirApprovals = new Map<string, PendingDirApproval>();
   private readonly logger: Logger;
   /** Settled once both the bus and Feishu sides are connected (see connect()). */
   private readonly ready: Promise<void>;
@@ -341,11 +443,23 @@ export class LarkWorker {
 
   constructor(opts: LarkBridgeOptions) {
     const create = opts.createChannel ?? createLarkChannel;
+    // Own the outbound config and pass this instance to the channel: mutating
+    // `allowedFileDirs` later is how a runtime `lark.dirs.add` reaches the
+    // already-connected channel's media uploader.
+    const outboundConfig: ChannelOutbound = { ...opts.channel?.outbound };
+    const seededDirs = dedupeDirs(
+      (outboundConfig.allowedFileDirs ?? []).map(normalizeDirPath),
+    );
+    outboundConfig.allowedFileDirs = seededDirs;
+    this.outboundConfig = outboundConfig;
+    this.allowedFileDirs = seededDirs;
+    this.approver = opts.approver ?? DEFAULT_APPROVER;
     this.lark = create({
       appId: opts.appId,
       appSecret: opts.appSecret,
       domain: opts.domain,
       ...opts.channel,
+      outbound: outboundConfig,
     });
     this.bus = opts.bus;
     this.workerID = opts.bus.id;
@@ -367,8 +481,9 @@ export class LarkWorker {
       id: this.workerID,
       subscriptions: [
         { type: LARK_REASON_SET },
-        { type: LARK_REASON_UNSET },
         { type: LARK_REASON_GET },
+        { type: LARK_DIRS_ADD },
+        { type: LARK_DIRS_GET },
         // A peer (or the WebUI) asking who is online. Presence is live-only and
         // not persisted, so a late subscriber learns the contract by asking.
         { type: EventType.WorkerDiscover },
@@ -424,25 +539,6 @@ export class LarkWorker {
     );
     this.base.register(
       {
-        event: LARK_REASON_UNSET,
-        description:
-          "Stop routing a Feishu chat to its own reason worker and fall back to the default, " +
-          "or clear the fallback. Provide chat_id to drop a chat override; include fallback=true " +
-          "(chat_id optional) to clear the fallback.",
-        parameters: Type.Object({
-          chat_id: Type.Optional(Type.String({
-            description: "Feishu chat_id to stop overriding, falling back to the default",
-          })),
-          fallback: Type.Optional(Type.Boolean({
-            description: "Clear the fallback reason worker",
-          })),
-        }),
-        response: Type.String({ description: '"ok" once the routing change is persisted' }),
-      },
-      (evt) => this.handleReasonUnset(evt),
-    );
-    this.base.register(
-      {
         event: LARK_REASON_GET,
         description:
           "Return the current chat → reason worker routing (default + per-chat overrides).",
@@ -456,6 +552,47 @@ export class LarkWorker {
         }),
       },
       (evt) => this.handleReasonGet(evt),
+    );
+
+    // The lark.dirs.* group: extend the local-file allowlist at runtime. An add
+    // from anyone other than the approver is parked behind an approval.request;
+    // an approved add is persisted and applies to the live channel at once.
+    this.base.register(
+      {
+        event: LARK_DIRS_ADD,
+        description:
+          "Allow local file media sends from an additional directory (absolute path; ~ expands). " +
+          `Requests from the approver (${this.approver || "none — gating disabled"}) apply immediately; ` +
+          "any other caller waits for the approver's approval.decision, then receives the updated allowlist.",
+        parameters: Type.Object({
+          path: Type.String({
+            description: "Directory to allow (absolute, or ~-prefixed)",
+          }),
+        }),
+        response: Type.Object({
+          dirs: Type.Array(Type.String(), {
+            description: "The resulting local-file allowlist",
+          }),
+          added: Type.String({ description: "The directory just added" }),
+        }),
+      },
+      (evt) => this.handleDirsAdd(evt),
+    );
+    this.base.register(
+      {
+        event: LARK_DIRS_GET,
+        description: "Return the local-file allowlist and the configured approver.",
+        parameters: Type.Object({}),
+        response: Type.Object({
+          dirs: Type.Array(Type.String(), {
+            description: "Current local-file allowlist",
+          }),
+          approver: Type.String({
+            description: "Worker that approves additions (empty = gating disabled)",
+          }),
+        }),
+      },
+      (evt) => this.handleDirsGet(evt),
     );
 
     let markReady!: () => void;
@@ -510,7 +647,7 @@ export class LarkWorker {
     await this.loadState();
     this.markReady();
     this.logger.info(
-      `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name}`,
+      `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "— (local file sends will be rejected)"} approver=${this.approver || "— (allowlist gating disabled)"}`,
     );
     // Presence is live-only (the SDK marks worker.ready transient and excludes
     // this worker from its own broadcast). The SDK also remembers this contract
@@ -527,10 +664,15 @@ export class LarkWorker {
     await this.connect();
     // The worker never acts on `worker.input` events — reason does not reply
     // to lark that way. Replies arrive only via the `lark.send` extension, and
-    // routing is managed via the `lark.reason.*` extensions; every event is
-    // dispatched to the registered extension handlers (unknown events are
-    // ignored). `worker.discover` is protocol traffic, answered by BaseWorker.
+    // routing/allowlist management via the `lark.reason.*` / `lark.dirs.*`
+    // extensions; every other event is dispatched to its registered handler
+    // (unknown events are ignored). `worker.discover` is protocol traffic,
+    // answered by BaseWorker.
     for await (const evt of this.bus.events()) {
+      // An approval.decision — or the bus reporting that an approval request
+      // could not be delivered — answers a parked allowlist addition. These are
+      // replies, not extensions, so they are resolved before dispatch.
+      if (await this.handleApprovalReply(evt)) continue;
       this.base.dispatchExtension(evt);
     }
   }
@@ -626,22 +768,44 @@ export class LarkWorker {
         if (typeof wid === "string" && wid) this.perChat.set(chat, wid);
       }
     }
+    // Persisted allowlist additions extend the env seed (the seed is the
+    // deploy-time baseline; runtime additions must survive a restart).
+    const persistedDirs = Array.isArray(state["allowed_file_dirs"])
+      ? (state["allowed_file_dirs"] as unknown[]).filter(
+          (d): d is string => typeof d === "string" && d.trim() !== "",
+        )
+      : [];
+    if (persistedDirs.length > 0) {
+      this.setAllowedFileDirs([...this.allowedFileDirs, ...persistedDirs]);
+    }
     this.logger.info(
-      `[${NS}] loaded reason state: default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
+      `[${NS}] loaded reason state: default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "—"}`,
     );
   }
 
-  /** Persist the current routing. Best-effort: a failed write is logged, not thrown. */
+  /** Persist the current routing and allowlist. Best-effort: a failed write is logged, not thrown. */
   private async persistState(): Promise<void> {
     try {
       await this.stateStore.save({
         default_reason_worker: this.defaultReasonWorker,
         fallback_reason_worker: this.fallbackReasonWorker,
         per_chat: Object.fromEntries(this.perChat),
+        allowed_file_dirs: [...this.allowedFileDirs],
       });
     } catch (err) {
       this.logger.error(`[${NS}] failed to persist reason state:`, err);
     }
+  }
+
+  /**
+   * Replace the local-file allowlist. `outboundConfig` is the object handed to
+   * the channel, so assigning the new array here is what makes the change
+   * visible to the media uploader on the next send; the entries are persisted
+   * by the caller.
+   */
+  private setAllowedFileDirs(dirs: readonly string[]): void {
+    this.allowedFileDirs = dedupeDirs(dirs.map(normalizeDirPath));
+    this.outboundConfig.allowedFileDirs = this.allowedFileDirs;
   }
 
   /** Fill the {chat_id} / {sender_open_id} placeholders in the reminder template. */
@@ -798,34 +962,6 @@ export class LarkWorker {
     await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
   }
 
-  /** Serve the `lark.reason.unset` extension: drop a chat override or clear the fallback. */
-  private async handleReasonUnset(evt: Event): Promise<void> {
-    const tc = parseToolCall(evt);
-    const chatId = argString(tc.args, "chat_id") || argString(tc.args, "chatId");
-    const isFallback = tc.args["fallback"] === true;
-
-    if (isFallback) {
-      this.fallbackReasonWorker = "";
-      await this.persistState();
-      await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
-      this.logger.info(`[${NS}] lark.reason.unset fallback cleared`);
-      return;
-    }
-    if (!chatId) {
-      await this.base.replyFailed(
-        tc.callerID,
-        tc.callID,
-        "chat_id is required (or set fallback=true to clear the fallback)",
-        tc.traceID,
-      );
-      return;
-    }
-    this.perChat.delete(chatId);
-    await this.persistState();
-    await this.base.replyCompleted(tc.callerID, tc.callID, "ok", tc.traceID);
-    this.logger.info(`[${NS}] lark.reason.unset chat=${chatId} → default ${this.defaultReasonWorker}`);
-  }
-
   /** Serve the `lark.reason.get` extension: return the current routing as JSON. */
   private async handleReasonGet(evt: Event): Promise<void> {
     const tc = parseToolCall(evt);
@@ -844,6 +980,192 @@ export class LarkWorker {
     this.logger.info(
       `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
     );
+  }
+
+  /**
+   * Serve `lark.dirs.add`: extend the local-file allowlist. The approver's own
+   * request is the consent and applies directly; any other caller is parked
+   * behind an `approval.request` and answered when the verdict arrives.
+   */
+  private async handleDirsAdd(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    const rawPath = argString(tc.args, "path") || argString(tc.args, "dir");
+    if (!rawPath.trim()) {
+      await this.base.replyFailed(
+        tc.callerID,
+        tc.callID,
+        "path is required",
+        tc.traceID,
+      );
+      return;
+    }
+    const path = normalizeDirPath(rawPath);
+
+    if (this.approver && tc.callerID !== this.approver) {
+      await this.requestDirApproval(tc, path);
+      return;
+    }
+    await this.applyDirAdd(tc, path);
+  }
+
+  /** Serve `lark.dirs.get`: the current allowlist plus the configured approver. */
+  private async handleDirsGet(evt: Event): Promise<void> {
+    const tc = parseToolCall(evt);
+    await this.base.replyCompleted(
+      tc.callerID,
+      tc.callID,
+      { dirs: [...this.allowedFileDirs], approver: this.approver },
+      tc.traceID,
+    );
+    this.logger.info(
+      `[${NS}] lark.dirs.get dirs=${this.allowedFileDirs.join(",") || "—"} approver=${this.approver || "—"}`,
+    );
+  }
+
+  /** Add one directory to the allowlist, persist it, and answer the caller. */
+  private async applyDirAdd(tc: ToolCall, path: string): Promise<void> {
+    this.setAllowedFileDirs([...this.allowedFileDirs, path]);
+    await this.persistState();
+    this.logger.info(
+      `[${NS}] lark.dirs.add → ${path} (dirs=${this.allowedFileDirs.join(",") || "—"})`,
+    );
+    await this.base.replyCompleted(
+      tc.callerID,
+      tc.callID,
+      { dirs: [...this.allowedFileDirs], added: path },
+      tc.traceID,
+    );
+  }
+
+  /**
+   * Park a non-approver `lark.dirs.add` behind the approver's decision. The
+   * request is not answered here — the caller stays open until
+   * {@link handleApprovalReply} applies or rejects it.
+   */
+  private async requestDirApproval(tc: ToolCall, path: string): Promise<void> {
+    let exists = false;
+    try {
+      exists = (await stat(path)).isDirectory();
+    } catch {
+      // Existence is context for the approver, not a precondition: the
+      // directory may be created after the approval (the SDK's containment
+      // check is prefix-based, so a not-yet-existing allowlist entry is fine).
+    }
+
+    const approval = createEvent(APPROVAL_REQUEST, {
+      origin: tc.callerID,
+      requested_by: this.workerID,
+      action: LARK_DIRS_ADD,
+      path,
+      exists,
+      dirs: [...this.allowedFileDirs],
+    });
+    approval.request_id = approval.id;
+    if (tc.traceID) approval.trace_id = tc.traceID;
+
+    // Park BEFORE sending: a decision can arrive while the send is in flight,
+    // and it would be dropped as unknown without the pending entry.
+    this.pendingDirApprovals.set(approval.id, {
+      path,
+      callerID: tc.callerID,
+      callID: tc.callID,
+      traceID: tc.traceID,
+    });
+
+    try {
+      await this.bus.send(approval, this.approver);
+    } catch (err) {
+      this.pendingDirApprovals.delete(approval.id);
+      this.logger.error(
+        `[${NS}] lark.dirs.add approval request to ${this.approver} failed:`,
+        err,
+      );
+      await this.base.replyFailed(
+        tc.callerID,
+        tc.callID,
+        `approval request failed: ${(err as Error).message}`,
+        tc.traceID,
+      );
+      return;
+    }
+    this.logger.info(
+      `[${NS}] lark.dirs.add approval requested from ${this.approver}: ${path} (requested by ${tc.callerID}, parked ${approval.id})`,
+    );
+  }
+
+  /**
+   * Resolve a parked allowlist addition from the approver's verdict — or from
+   * the bus reporting that the approval request could not be delivered.
+   * Returns true when the event belongs to a pending approval (and so was
+   * consumed rather than dispatched as an extension).
+   */
+  private async handleApprovalReply(evt: Event): Promise<boolean> {
+    const isDecision = evt.type === APPROVAL_DECISION;
+    const isUndelivered =
+      evt.type === EventType.RequestFailed ||
+      evt.type === EventType.RequestRejected;
+    if (!isDecision && !isUndelivered) return false;
+
+    const id = evt.request_id ?? "";
+    if (!id) return false;
+    const pending = this.pendingDirApprovals.get(id);
+    if (!pending) return false;
+
+    if (isUndelivered) {
+      this.pendingDirApprovals.delete(id);
+      const reason =
+        (typeof evt.payload["error"] === "string" && evt.payload["error"]) ||
+        (typeof evt.payload["reason"] === "string" && evt.payload["reason"]) ||
+        "not delivered";
+      this.logger.warn(
+        `[${NS}] approval request ${id} could not reach ${this.approver}: ${reason}`,
+      );
+      await this.base.replyFailed(
+        pending.callerID,
+        pending.callID,
+        `approval request failed: ${reason}`,
+        pending.traceID,
+      );
+      return true;
+    }
+
+    if (this.approver && evt.worker_id !== this.approver) {
+      // Only the configured approver may decide; keep the request parked and
+      // ignore the event, in case the real approver answers later.
+      this.logger.warn(
+        `[${NS}] ignoring ${APPROVAL_DECISION} for ${id} from ${evt.worker_id} (expected ${this.approver})`,
+      );
+      return true;
+    }
+
+    this.pendingDirApprovals.delete(id);
+    const approved = evt.payload["approved"] === true;
+    const note =
+      typeof evt.payload["note"] === "string" ? evt.payload["note"] : "";
+    if (!approved) {
+      const msg = note ? `approval denied: ${note}` : "approval denied";
+      this.logger.info(`[${NS}] lark.dirs.add denied: ${pending.path} (${msg})`);
+      await this.base.replyFailed(
+        pending.callerID,
+        pending.callID,
+        msg,
+        pending.traceID,
+      );
+      return true;
+    }
+
+    this.logger.info(`[${NS}] lark.dirs.add approved: ${pending.path}`);
+    await this.applyDirAdd(
+      {
+        callID: pending.callID,
+        name: LARK_DIRS_ADD,
+        callerID: pending.callerID,
+        args: {},
+        traceID: pending.traceID,
+      },
+      pending.path,
+    );
+    return true;
   }
 }
 

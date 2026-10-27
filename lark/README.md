@@ -34,8 +34,62 @@ worker and per-chat routing come from env or flags (see Config). See
 | **Fallback reason worker** | `LARK_FALLBACK_REASON_WORKER` | `--fallback-reason-worker` | — |
 | **Per-chat routing** | `LARK_REASON_WORKER_MAPPINGS` | `--reason-mappings` | `{}` |
 | Persisted routing state | `LARK_STATE_FILE` | `--state-file` | `./lark-reason-state.json` |
+| Local file send allowlist | `LARK_ALLOWED_FILE_DIRS` | `--allowed-file-dirs` | _(none — local file sends rejected)_ |
+| Allowlist approver | `LARK_APPROVER` | `--approver` | `webui-hiw` (`""` disables gating) |
 
 At least one of the default or fallback reason worker must be configured.
+
+### Sending local files
+
+`@larksuite/channel` **rejects local file media sources by default** (an
+allowlist avoids reading arbitrary files such as `~/.ssh/id_rsa` or `.env`).
+To let a reason worker `lark.send` a local path as `image` / `file` / `video` /
+`audio`, list the directories it may read from as a comma-separated value:
+
+```sh
+LARK_ALLOWED_FILE_DIRS=/var/niq/outbox,/tmp/niq-reports
+# or: --allowed-file-dirs /var/niq/outbox,/tmp/niq-reports
+```
+
+Requirements enforced by the SDK:
+
+- Each sent path must resolve **inside** one of the listed directories.
+- Paths are resolved against the worker process's working directory, so
+  **absolute directories are recommended** (relative entries and `~/` are
+  normalized to absolute paths at startup).
+- Symlinks are re-checked after `realpath`; POSIX system dirs (`/etc/`,
+  `/proc/`, `/sys/`, `/dev/`) stay blocked regardless.
+
+`http(s)` URL media and `Buffer` sources work without this setting, and so do
+text sends. When unset, a local-path media send fails with
+`local file source requires \`outbound.allowedFileDirs\` to be configured`; the
+startup log shows `local_file_dirs=…` so you can confirm what took effect.
+
+#### Adding directories at runtime (approval-gated)
+
+The env allowlist is the deploy-time baseline. A peer (typically the reason
+worker) can widen it at runtime with `lark.dirs.add`:
+
+```text
+lark.dirs.add { path: "/var/niq/outbox2" }
+```
+
+- Requests from the **approver** worker (`LARK_APPROVER` / `--approver`, default
+  `webui-hiw`) are treated as consent and applied immediately — the approver
+  already decided.
+- Requests from **any other worker** are parked: lark sends an
+  `approval.request` (`{ action: "lark.dirs.add", path, exists, dirs, origin }`)
+  to the approver and keeps the caller's request open. The approver's
+  `approval.decision` (`{ approved, note? }`, echoing `request_id`) resolves it:
+  approval applies and persists the addition, denial answers `request.failed`.
+- Approved additions are persisted alongside the routing state in
+  `LARK_STATE_FILE`, so they survive a restart and extend the env seed.
+- The change takes effect on the **live** channel: the SDK re-reads the
+  allowlist on every send, so no reconnect is needed.
+- Set `--approver ""` explicitly to disable gating (all adds apply directly).
+  An empty `LARK_APPROVER` still means the default `webui-hiw`. There is
+  intentionally no remove/unset event — narrowing the allowlist stays a
+  deploy-time decision.
 
 ## Events
 
@@ -45,8 +99,9 @@ At least one of the default or fallback reason worker must be configured.
 |---|---|---|
 | `lark.send` | `{ target?, text? }` — or one of `image` / `file` / `video` / `audio` (http(s) URL or local path; `file` takes `file_name`) to send media | `request.completed` → `"sent"`; `request.failed` if no target / no text or media / send error |
 | `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
-| `lark.reason.unset` | `{ chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
 | `lark.reason.get` | `{}` | `request.completed` → `{ default_reason_worker, fallback_reason_worker, per_chat }` (a structured object, not a JSON string) |
+| `lark.dirs.add` | `{ path: string }` (absolute or `~/`; missing dirs are allowed) | `request.completed` → `{ dirs, added }`; `request.failed` if `path` is missing, the approval is denied, or the approval request could not be delivered |
+| `lark.dirs.get` | `{}` | `request.completed` → `{ dirs, approver }` |
 
 Schemas are TypeBox (`@sinclair/typebox`) and are announced in `worker.ready`, so
 `parameters` and `response` are visible to peers — `directory.get_worker_info`
@@ -63,8 +118,9 @@ learns lark's tools.
 |---|---|---|
 | `worker.input` | `{ text, chat_id, sender_open_id, input_mode: "append" }` | bound reason worker (per-chat → default → fallback) |
 | `worker.ready` | `{ type: "lark", watch, publishes }` | broadcast (transient presence) |
+| `approval.request` | `{ origin, requested_by, action: "lark.dirs.add", path, exists, dirs }` | approver (only for a non-approver `lark.dirs.add`) |
 
-Routing resolution for each Feishu message: `per_chat[chat_id] ?? default(reason-worker) ?? fallback(fallback-reason-worker)`. Routing state is persisted to `LARK_STATE_FILE` across restarts.
+Routing resolution for each Feishu message: `per_chat[chat_id] ?? default(reason-worker) ?? fallback(fallback-reason-worker)`. Routing state and runtime allowlist additions are persisted to `LARK_STATE_FILE` across restarts. lark also **consumes** `approval.decision` (directed from the approver) to resolve a parked `lark.dirs.add`.
 
 ## Usage in code
 

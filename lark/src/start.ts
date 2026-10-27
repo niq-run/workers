@@ -20,6 +20,13 @@
  * Proactive reason→lark messages use lark.send with no target and fall back to
  * --default-user / LARK_DEFAULT_USER_ID (a Feishu open_id) when the reason
  * worker supplies no explicit target.
+ *
+ * Local file media sends are rejected by @larksuite/channel unless an
+ * allowlist is configured; pass --allowed-file-dirs /
+ * LARK_ALLOWED_FILE_DIRS (comma-separated absolute directories) to permit them.
+ * The allowlist can also be extended at runtime with `lark.dirs.add`, which is
+ * gated on the approver worker (--approver / LARK_APPROVER, default
+ * `webui-hiw`); approved additions are persisted to the state file.
  */
 import {
   HTTPWorkerClient,
@@ -27,7 +34,13 @@ import {
   parseCliArgs,
   runWorkerApp,
 } from "@niq.run/worker-sdk";
-import { LarkWorker, larkConfigFromEnv, type LarkBridgeOptions } from "./worker.js";
+import {
+  DEFAULT_APPROVER,
+  LarkWorker,
+  larkConfigFromEnv,
+  parseDirList,
+  type LarkBridgeOptions,
+} from "./worker.js";
 
 function usage(): void {
   console.error(
@@ -39,7 +52,9 @@ function usage(): void {
       "--default-user <open_id> (default: LARK_DEFAULT_USER_ID), --reason-worker <id> (default: NIQ_REASON_WORKER), " +
       "--fallback-reason-worker <id> (default: LARK_FALLBACK_REASON_WORKER), " +
       "--reason-mappings <json> (default: LARK_REASON_WORKER_MAPPINGS; {chat_id: worker_id}), " +
-      "--state-file <path> (default: LARK_STATE_FILE / ./lark-reason-state.json)",
+      "--state-file <path> (default: LARK_STATE_FILE / ./lark-reason-state.json), " +
+      "--allowed-file-dirs <dirs> (default: LARK_ALLOWED_FILE_DIRS; comma-separated directories local file sends may read from), " +
+      "--approver <worker-id> (default: LARK_APPROVER / webui-hiw; empty string disables approval gating)",
   );
 }
 
@@ -68,6 +83,24 @@ await runWorkerApp(async () => {
   if (opts["app-id"] !== undefined) lark.appId = String(opts["app-id"]);
   if (opts["app-secret"] !== undefined) lark.appSecret = String(opts["app-secret"]);
   if (opts["domain"] !== undefined) lark.domain = String(opts["domain"]);
+  // Opt in to local file media sends (default-deny in @larksuite/channel). The
+  // flag overrides LARK_ALLOWED_FILE_DIRS, which larkConfigFromEnv already read.
+  const allowedFileDirs = parseDirList(
+    String(opts["allowed-file-dirs"] ?? process.env.LARK_ALLOWED_FILE_DIRS ?? ""),
+  );
+  if (allowedFileDirs) {
+    lark.channel = {
+      ...lark.channel,
+      outbound: { ...lark.channel?.outbound, allowedFileDirs },
+    };
+  }
+
+  // Runtime allowlist additions (`lark.dirs.add`) are gated on this worker;
+  // its own requests skip the gate. An explicit empty --approver disables it.
+  const approver =
+    opts["approver"] !== undefined
+      ? String(opts["approver"]).trim()
+      : process.env.LARK_APPROVER?.trim() || DEFAULT_APPROVER;
   const defaultUserOpenId = String(opts["default-user"] ?? process.env.LARK_DEFAULT_USER_ID ?? "");
 
   // Optional initial chat → reason worker routing from config.
@@ -96,6 +129,7 @@ await runWorkerApp(async () => {
     ...(reasonWorkerMappings ? { reasonWorkerMappings } : {}),
     ...(stateFile ? { stateFile } : {}),
     ...(defaultUserOpenId ? { defaultUserOpenId } : {}),
+    approver,
   };
 
   const worker = new LarkWorker(workerOpts);

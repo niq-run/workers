@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   LarkWorker,
   larkConfigFromEnv,
+  parseDirList,
   LARK_REASON_SET,
-  LARK_REASON_UNSET,
   LARK_REASON_GET,
+  LARK_DIRS_ADD,
+  LARK_DIRS_GET,
+  DEFAULT_APPROVER,
   buildSendInput,
   type LarkChannel,
   type LarkStateStore,
@@ -117,6 +120,8 @@ function makeWorker(opts: {
   echo?: boolean;
   defaultUserOpenId?: string;
   appendOutbound?: boolean;
+  allowedFileDirs?: string[];
+  approver?: string;
 }) {
   const { channel, sent, getHandler } = fakeChannel();
   const { store, saved } = fakeStateStore();
@@ -140,6 +145,10 @@ function makeWorker(opts: {
     ...(opts.appendOutbound !== undefined
       ? { appendOutbound: opts.appendOutbound }
       : {}),
+    ...(opts.allowedFileDirs !== undefined
+      ? { channel: { outbound: { allowedFileDirs: opts.allowedFileDirs } } }
+      : {}),
+    ...(opts.approver !== undefined ? { approver: opts.approver } : {}),
   });
   return { worker, channel, larkSent: sent, getHandler, stateSaved: saved };
 }
@@ -166,9 +175,59 @@ describe("larkConfigFromEnv", () => {
       /LARK_APP_SECRET/,
     );
   });
+
+  it("forwards LARK_ALLOWED_FILE_DIRS as outbound.allowedFileDirs", () => {
+    const cfg = larkConfigFromEnv({
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      LARK_ALLOWED_FILE_DIRS: "/var/niq/outbox, /tmp/reports",
+    });
+    expect(cfg.channel?.outbound?.allowedFileDirs).toEqual([
+      "/var/niq/outbox",
+      "/tmp/reports",
+    ]);
+  });
+
+  it("omits the channel block when no local-file dirs are configured", () => {
+    expect(
+      larkConfigFromEnv({ LARK_APP_ID: "cli_a", LARK_APP_SECRET: "secret" }),
+    ).not.toHaveProperty("channel");
+  });
+});
+
+describe("parseDirList", () => {
+  it("splits on commas, trims, and drops blank entries", () => {
+    expect(parseDirList(" /a , ,/b ")).toEqual(["/a", "/b"]);
+  });
+
+  it("returns undefined for an absent or blank list", () => {
+    expect(parseDirList(undefined)).toBeUndefined();
+    expect(parseDirList("  ,  ")).toBeUndefined();
+  });
 });
 
 describe("LarkWorker", () => {
+  it("passes the configured local-file allowlist through to the channel", () => {
+    const { bus } = fakeBus();
+    const { channel } = fakeChannel();
+    const createChannel = vi.fn(() => channel);
+    new LarkWorker({
+      appId: "cli_a",
+      appSecret: "secret",
+      createChannel,
+      channel: { outbound: { allowedFileDirs: ["/var/niq/outbox"] } },
+      bus,
+      reasonWorkerID: "reason.0",
+      stateStore: fakeStateStore().store,
+    });
+    expect(createChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "cli_a",
+        outbound: { allowedFileDirs: ["/var/niq/outbox"] },
+      }),
+    );
+  });
+
   it("forwards a Feishu message to the bound reason worker with a system reminder", async () => {
     const { bus, sent } = fakeBus();
     const { worker, getHandler } = makeWorker({ bus });
@@ -215,8 +274,9 @@ describe("LarkWorker", () => {
     expect(watch.map((w) => w.event)).toEqual([
       "lark.send",
       "lark.reason.set",
-      "lark.reason.unset",
       "lark.reason.get",
+      "lark.dirs.add",
+      "lark.dirs.get",
     ]);
     for (const entry of watch) {
       expect(entry.parameters).toMatchObject({ type: "object" });
@@ -572,15 +632,16 @@ describe("LarkWorker", () => {
       default_reason_worker: "reason.9",
       fallback_reason_worker: "",
       per_chat: {},
+      allowed_file_dirs: [],
     });
 
     sink.end();
     await running;
   });
 
-  it("maps a chat via lark.reason.set, overrides default, unset falls back", async () => {
+  it("maps a chat via lark.reason.set, overriding the default", async () => {
     const { bus, sink, sent } = fakeBus();
-    const { worker, getHandler, stateSaved } = makeWorker({ bus });
+    const { worker, getHandler } = makeWorker({ bus });
 
     const running = worker.run();
     await flush();
@@ -599,21 +660,6 @@ describe("LarkWorker", () => {
     await getHandler()({ chatId: "oc_b", messageId: "m2", content: "yo", senderId: "ou_1" });
     expect(sent.filter((s) => s.evt.type === "worker.input")[0].targets).toEqual(["reason.A"]);
     expect(sent.filter((s) => s.evt.type === "worker.input")[1].targets).toEqual(["reason.0"]);
-
-    // Unset the override → back to default.
-    sink.push({
-      id: "r3",
-      type: LARK_REASON_UNSET,
-      status: "created",
-      payload: { chat_id: "oc_a" },
-      worker_id: "admin.0",
-      request_id: "call-unset",
-      timestamp: Date.now(),
-    });
-    await flush();
-    await getHandler()({ chatId: "oc_a", messageId: "m3", content: "hi", senderId: "ou_1" });
-    expect(sent.filter((s) => s.evt.type === "worker.input").at(-1)!.targets).toEqual(["reason.0"]);
-    expect(stateSaved.at(-1)).toEqual({ default_reason_worker: "reason.0", fallback_reason_worker: "", per_chat: {} });
 
     sink.end();
     await running;
@@ -705,6 +751,7 @@ describe("LarkWorker", () => {
       default_reason_worker: "",
       fallback_reason_worker: "reason.FB",
       per_chat: {},
+      allowed_file_dirs: [],
     });
 
     sink.end();
@@ -727,6 +774,323 @@ describe("LarkWorker", () => {
     await worker.connect();
     await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
     expect(sent[0].targets).toEqual(["reason.FB"]);
+  });
+});
+
+describe("lark.dirs.* (runtime allowlist)", () => {
+  it("applies an approver's own add directly, persists it, and updates the live channel config", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { channel } = fakeChannel();
+    const createChannel = vi.fn((_opts: any) => channel);
+    const { store, saved } = fakeStateStore();
+    const worker = new LarkWorker({
+      appId: "cli_a",
+      appSecret: "secret",
+      createChannel,
+      channel: { outbound: { allowedFileDirs: ["/seed"] } },
+      bus,
+      reasonWorkerID: "reason.0",
+      stateStore: store,
+    });
+    // The very object handed to the channel is what the SDK's uploader reads.
+    const channelOpts = createChannel.mock.calls[0][0] as any;
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d1",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/tmp/new" },
+      worker_id: DEFAULT_APPROVER,
+      request_id: "call-d1",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(channelOpts.outbound.allowedFileDirs).toEqual(["/seed", "/tmp/new"]);
+    expect(saved.at(-1)!.allowed_file_dirs).toEqual(["/seed", "/tmp/new"]);
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-d1");
+    expect(reply.targets).toEqual([DEFAULT_APPROVER]);
+    expect(reply.evt.payload).toEqual({
+      dirs: ["/seed", "/tmp/new"],
+      added: "/tmp/new",
+    });
+
+    sink.end();
+    await running;
+  });
+
+  it("parks a non-approver's add behind an approval.request, then applies it on approval", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, stateSaved } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d2",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/data/outbox" },
+      worker_id: "reason.0",
+      request_id: "call-d2",
+      trace_id: "trace-7",
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    // The call is not answered yet: an approval.request went to the approver.
+    expect(sent).toHaveLength(1);
+    const approval = sent[0];
+    expect(approval.evt.type).toBe("approval.request");
+    expect(approval.targets).toEqual([DEFAULT_APPROVER]);
+    expect(approval.evt.id).toBe(approval.evt.request_id);
+    expect(approval.evt.trace_id).toBe("trace-7");
+    expect(approval.evt.payload).toMatchObject({
+      origin: "reason.0",
+      action: LARK_DIRS_ADD,
+      path: "/data/outbox",
+      dirs: [],
+    });
+
+    sink.push({
+      id: "dec1",
+      type: "approval.decision",
+      status: "routed",
+      payload: { approved: true },
+      worker_id: DEFAULT_APPROVER,
+      request_id: approval.evt.id,
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.completed");
+    expect(reply.evt.request_id).toBe("call-d2");
+    expect(reply.targets).toEqual(["reason.0"]);
+    expect(reply.evt.payload).toEqual({
+      dirs: ["/data/outbox"],
+      added: "/data/outbox",
+    });
+    expect(stateSaved.at(-1)!.allowed_file_dirs).toEqual(["/data/outbox"]);
+
+    sink.end();
+    await running;
+  });
+
+  it("fails the caller when the approver denies", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker, stateSaved } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d3",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/etc/passwd-dir" },
+      worker_id: "reason.0",
+      request_id: "call-d3",
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const approval = sent[0];
+
+    sink.push({
+      id: "dec2",
+      type: "approval.decision",
+      status: "routed",
+      payload: { approved: false, note: "too broad" },
+      worker_id: DEFAULT_APPROVER,
+      request_id: approval.evt.id,
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.failed");
+    expect(reply.evt.request_id).toBe("call-d3");
+    expect((reply.evt.payload as any).error).toBe("approval denied: too broad");
+    expect(stateSaved).toHaveLength(0);
+
+    sink.end();
+    await running;
+  });
+
+  it("fails the caller when the approval request cannot be delivered", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d4",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/data/x" },
+      worker_id: "reason.0",
+      request_id: "call-d4",
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const approval = sent[0];
+
+    // The bus reports an offline target against the approval's request id.
+    sink.push({
+      id: "bus-fail",
+      type: "request.failed",
+      status: "routed",
+      payload: { error: "target is not online: webui-hiw" },
+      worker_id: DEFAULT_APPROVER,
+      request_id: approval.evt.id,
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+
+    const reply = sent.at(-1)!;
+    expect(reply.evt.type).toBe("request.failed");
+    expect(reply.evt.request_id).toBe("call-d4");
+    expect((reply.evt.payload as any).error).toBe(
+      "approval request failed: target is not online: webui-hiw",
+    );
+
+    sink.end();
+    await running;
+  });
+
+  it("ignores a decision from a worker other than the configured approver", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d5",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/data/y" },
+      worker_id: "reason.0",
+      request_id: "call-d5",
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const approval = sent[0];
+
+    // A non-approver tries to grant it: ignored, and nothing is answered.
+    sink.push({
+      id: "dec3",
+      type: "approval.decision",
+      status: "routed",
+      payload: { approved: true },
+      worker_id: "reason.0",
+      request_id: approval.evt.id,
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(sent).toHaveLength(1);
+
+    // The real approver still can.
+    sink.push({
+      id: "dec4",
+      type: "approval.decision",
+      status: "routed",
+      payload: { approved: true },
+      worker_id: DEFAULT_APPROVER,
+      request_id: approval.evt.id,
+      timestamp: Date.now(),
+    });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent.at(-1)!.evt.type).toBe("request.completed");
+    expect(sent.at(-1)!.evt.request_id).toBe("call-d5");
+
+    sink.end();
+    await running;
+  });
+
+  it("applies adds directly when no approver is configured", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus, approver: "" });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d6",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: { path: "/data/z" },
+      worker_id: "reason.0",
+      request_id: "call-d6",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].evt.type).toBe("request.completed");
+    expect(sent[0].evt.payload).toEqual({ dirs: ["/data/z"], added: "/data/z" });
+
+    sink.end();
+    await running;
+  });
+
+  it("merges persisted allowlist additions onto the env seed on connect", async () => {
+    const store: LarkStateStore = {
+      load: async () => ({ allowed_file_dirs: ["/persisted/dir"] }),
+      save: async () => {},
+    };
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({
+      bus,
+      stateStore: store,
+      allowedFileDirs: ["/env/dir"],
+    });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "g1",
+      type: LARK_DIRS_GET,
+      status: "created",
+      payload: {},
+      worker_id: "admin.0",
+      request_id: "call-get-dirs",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(sent.at(-1)!.evt.payload).toEqual({
+      dirs: ["/env/dir", "/persisted/dir"],
+      approver: DEFAULT_APPROVER,
+    });
+
+    sink.end();
+    await running;
+  });
+
+  it("replies request.failed when path is missing", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+
+    const running = worker.run();
+    await flush();
+    sink.push({
+      id: "d7",
+      type: LARK_DIRS_ADD,
+      status: "created",
+      payload: {},
+      worker_id: DEFAULT_APPROVER,
+      request_id: "call-d7",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].evt.type).toBe("request.failed");
+    expect((sent[0].evt.payload as any).error).toBe("path is required");
+
+    sink.end();
+    await running;
   });
 });
 
