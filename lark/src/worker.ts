@@ -201,6 +201,15 @@ export interface LarkConfig {
    * shortcut is `LARK_ALLOWED_FILE_DIRS`.
    */
   channel?: Omit<LarkChannelOptions, "appId" | "appSecret" | "domain">;
+  /**
+   * Worker that must approve runtime additions to the local-file allowlist
+   * (`lark.dirs.add`). A request from this worker applies directly; any other
+   * caller is parked behind an `approval.request` until its `approval.decision`
+   * arrives. Defaults to `webui-hiw` (mirroring the workspace worker); an empty
+   * string disables gating. Declared here — rather than on the bridge options —
+   * so {@link larkConfigFromEnv} can read `LARK_APPROVER` for programmatic use too.
+   */
+  approver?: string;
   /** Injectable factory — defaults to {@link createLarkChannel}. */
   createChannel?: (opts: LarkChannelOptions) => LarkChannel;
 }
@@ -244,6 +253,7 @@ export function larkConfigFromEnv(
   const appId = env.LARK_APP_ID?.trim() ?? "";
   const appSecret = env.LARK_APP_SECRET?.trim() ?? "";
   const domain = env.LARK_DOMAIN?.trim() || "https://open.feishu.cn";
+  const approver = env.LARK_APPROVER?.trim() || DEFAULT_APPROVER;
   const allowedFileDirs = parseDirList(env.LARK_ALLOWED_FILE_DIRS)?.map(
     normalizeDirPath,
   );
@@ -265,6 +275,7 @@ export function larkConfigFromEnv(
     appId,
     appSecret,
     domain,
+    approver,
     ...(allowedFileDirs
       ? { channel: { outbound: { allowedFileDirs } } }
       : {}),
@@ -297,10 +308,9 @@ asking reason to answer with lark.send.
   text or media to a Feishu chat/user. target is a chat_id, open_id or user_id;
   without one it falls back to the configured default user. Repeated text sends
   to one target within a turn are appended into a single message.
-- lark.reason.set { worker_id, chat_id?, fallback? } — route a chat to a reason
-  worker, or set the default / last-resort fallback.
-- lark.reason.get {} — current routing: default_reason_worker,
-  fallback_reason_worker, per_chat.
+- lark.reason.set { worker_id, chat_id? } — route a chat to a reason worker, or
+  set the default.
+- lark.reason.get {} — current routing: default_reason_worker, per_chat.
 - lark.dirs.add { path } — allow local file media sends from an extra directory.
   Only the approver's own request applies immediately; anyone else is parked
   behind approval.request / approval.decision.
@@ -325,17 +335,9 @@ export interface LarkBridgeOptions extends LarkConfig {
   /**
    * The default reason worker Feishu messages are forwarded to when a chat has
    * no per-chat override (see {@link LarkBridgeOptions.reasonWorkerMappings}),
-   * unless a persisted state file overrides it. Optional: when unset, routing
-   * falls through to {@link LarkBridgeOptions.fallbackReasonWorkerID}. Config
-   * only seeds this value.
+   * unless a persisted state file overrides it. Config only seeds this value.
    */
   reasonWorkerID?: string;
-  /**
-   * The last-resort reason worker used when neither a per-chat mapping nor the
-   * default resolves. Optional; config only seeds it (mutable at runtime and
-   * persisted like the rest of the routing).
-   */
-  fallbackReasonWorkerID?: string;
   /**
    * Initial chat_id → reason worker id routing. Config only seeds the runtime
    * map; it is updateable at runtime via the `lark.reason.*` extensions and
@@ -375,29 +377,11 @@ export interface LarkBridgeOptions extends LarkConfig {
    * starts a fresh target message. Defaults to `true`.
    */
   appendOutbound?: boolean;
-  /**
-   * Worker ID whose consent is required for runtime additions to the local-file
-   * allowlist (`lark.dirs.add`). A request from this worker applies directly;
-   * a request from any other worker is parked behind an `approval.request`
-   * until its `approval.decision` arrives. Defaults to `webui-hiw`, mirroring
-   * the workspace worker; an empty string disables gating (all adds apply
-   * immediately).
-   */
-  approver?: string;
   /** Where to send diagnostics. Defaults to `console`. */
   logger?: Logger;
 }
 
 const NS = "lark";
-
-/**
- * Ask lark to describe itself — the generic "skill card" event every worker may
- * serve. Provided by the SDK now (`EventType.WorkerReadme`); kept as an alias
- * for consumers of this package.
- *
- * @deprecated use `EventType.WorkerReadme` from `@niq.run/worker-sdk`.
- */
-export const WORKER_README = EventType.WorkerReadme;
 
 /**
  * The extension lark exposes to peers (reason) for sending a Feishu message to
@@ -454,8 +438,6 @@ export class LarkWorker {
   private readonly workerID: string;
   /** Default reason worker; overridden per-chat by {@link perChat}. Mutable at runtime. */
   private defaultReasonWorker: string;
-  /** Last-resort worker used when neither per-chat nor default resolves. Mutable at runtime. */
-  private fallbackReasonWorker: string;
   /** chat_id → reason worker id. Updated by config seed, runtime events, and persisted state. */
   private readonly perChat = new Map<string, string>();
   private readonly stateStore: LarkStateStore;
@@ -509,7 +491,6 @@ export class LarkWorker {
     this.workerID = opts.bus.id;
     // Config seeds the routing state; a persisted state file overrides it on load.
     this.defaultReasonWorker = opts.reasonWorkerID ?? "";
-    this.fallbackReasonWorker = opts.fallbackReasonWorkerID ?? "";
     for (const [chat, wid] of Object.entries(opts.reasonWorkerMappings ?? {})) {
       if (wid) this.perChat.set(chat, wid);
     }
@@ -574,19 +555,15 @@ export class LarkWorker {
       {
         event: LARK_REASON_SET,
         description:
-          "Route a Feishu chat to a reason worker, set the default, or set the fallback. " +
-          "Provide worker_id. Include chat_id to route only that chat; include fallback=true " +
-          "(no chat_id) to set the last-resort fallback; otherwise the default reason worker is set.",
+          "Route a Feishu chat to a reason worker, or set the default. " +
+          "Provide worker_id. Include chat_id to route only that chat; otherwise the default reason worker is set.",
         parameters: Type.Object({
           chat_id: Type.Optional(Type.String({
-            description: "Feishu chat_id to route (omit to set the default or fallback)",
+            description: "Feishu chat_id to route (omit to set the default)",
           })),
           worker_id: Type.String({
             description: "Reason worker id to route matching messages to",
           }),
-          fallback: Type.Optional(Type.Boolean({
-            description: "Set the last-resort fallback reason worker instead of the default (ignored when chat_id is given)",
-          })),
         }),
         response: Type.String({ description: '"ok" once the routing change is persisted' }),
       },
@@ -600,7 +577,6 @@ export class LarkWorker {
         parameters: Type.Object({}),
         response: Type.Object({
           default_reason_worker: Type.String(),
-          fallback_reason_worker: Type.String(),
           per_chat: Type.Record(Type.String(), Type.String(), {
             description: "chat_id → reason worker id overrides",
           }),
@@ -702,7 +678,7 @@ export class LarkWorker {
     await this.loadState();
     this.markReady();
     this.logger.info(
-      `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "— (local file sends will be rejected)"} approver=${this.approver || "— (allowlist gating disabled)"}`,
+      `[${NS}] connected: bus worker_id=${this.workerID} default_reason=${this.defaultReasonWorker || "—"} per_chat=${this.perChat.size} feishu app=${this.lark.constructor.name} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "— (local file sends will be rejected)"} approver=${this.approver || "— (allowlist gating disabled)"}`,
     );
     // Presence is live-only (the SDK marks worker.ready transient and excludes
     // this worker from its own broadcast). The SDK also remembers this contract
@@ -776,7 +752,7 @@ export class LarkWorker {
     const reasonWorker = this.reasonWorkerFor(msg.chatId);
     if (!reasonWorker) {
       this.logger.warn(
-        `[${NS}] drop feishu message chat=${msg.chatId} msg=${msg.messageId}: no reason worker (no per-chat mapping, default, or fallback)`,
+        `[${NS}] drop feishu message chat=${msg.chatId} msg=${msg.messageId}: no reason worker (no per-chat mapping and no default)`,
       );
       return;
     }
@@ -787,15 +763,11 @@ export class LarkWorker {
   }
 
   /**
-   * Resolve the reason worker a chat's messages are forwarded to: per-chat
-   * mapping, else the default, else the last-resort fallback. Returns "" when
-   * none is configured.
+   * Resolve the reason worker a chat's messages are forwarded to: its per-chat
+   * mapping, else the default. Returns "" when neither is configured.
    */
   private reasonWorkerFor(chatId: string): string {
-    const perChat = this.perChat.get(chatId);
-    if (perChat) return perChat;
-    if (this.defaultReasonWorker) return this.defaultReasonWorker;
-    return this.fallbackReasonWorker;
+    return this.perChat.get(chatId) || this.defaultReasonWorker;
   }
 
   /**
@@ -812,9 +784,6 @@ export class LarkWorker {
     }
     if (typeof state["default_reason_worker"] === "string" && state["default_reason_worker"]) {
       this.defaultReasonWorker = state["default_reason_worker"] as string;
-    }
-    if (typeof state["fallback_reason_worker"] === "string" && state["fallback_reason_worker"]) {
-      this.fallbackReasonWorker = state["fallback_reason_worker"] as string;
     }
     const perChat = state["per_chat"];
     if (perChat && typeof perChat === "object" && !Array.isArray(perChat)) {
@@ -834,7 +803,7 @@ export class LarkWorker {
       this.setAllowedFileDirs([...this.allowedFileDirs, ...persistedDirs]);
     }
     this.logger.info(
-      `[${NS}] loaded reason state: default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "—"}`,
+      `[${NS}] loaded reason state: default=${this.defaultReasonWorker || "—"} per_chat=${this.perChat.size} local_file_dirs=${this.allowedFileDirs.length ? this.allowedFileDirs.join(",") : "—"}`,
     );
   }
 
@@ -843,7 +812,6 @@ export class LarkWorker {
     try {
       await this.stateStore.save({
         default_reason_worker: this.defaultReasonWorker,
-        fallback_reason_worker: this.fallbackReasonWorker,
         per_chat: Object.fromEntries(this.perChat),
         allowed_file_dirs: [...this.allowedFileDirs],
       });
@@ -983,16 +951,14 @@ export class LarkWorker {
   }
 
   /**
-   * Serve the `lark.reason.set` extension: route a chat to a worker (`chat_id`),
-   * set the default (neither `chat_id` nor `fallback`), or set the last-resort
-   * fallback (`fallback: true`). Persists the change so it survives a restart.
+   * Serve the `lark.reason.set` extension: route a chat to a worker (`chat_id`)
+   * or set the default. Persists the change so it survives a restart.
    */
   private async handleReasonSet(evt: Event): Promise<void> {
     const tc = parseToolCall(evt);
     const workerId =
       argString(tc.args, "worker_id") || argString(tc.args, "workerId");
     const chatId = argString(tc.args, "chat_id") || argString(tc.args, "chatId");
-    const isFallback = tc.args["fallback"] === true;
 
     if (!workerId) {
       await this.base.replyFailed(
@@ -1006,9 +972,6 @@ export class LarkWorker {
     if (chatId) {
       this.perChat.set(chatId, workerId);
       this.logger.info(`[${NS}] lark.reason.set chat=${chatId} → ${workerId}`);
-    } else if (isFallback) {
-      this.fallbackReasonWorker = workerId;
-      this.logger.info(`[${NS}] lark.reason.set fallback → ${workerId}`);
     } else {
       this.defaultReasonWorker = workerId;
       this.logger.info(`[${NS}] lark.reason.set default → ${workerId}`);
@@ -1027,13 +990,12 @@ export class LarkWorker {
       tc.callID,
       {
         default_reason_worker: this.defaultReasonWorker,
-        fallback_reason_worker: this.fallbackReasonWorker,
         per_chat: Object.fromEntries(this.perChat),
       },
       tc.traceID,
     );
     this.logger.info(
-      `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} fallback=${this.fallbackReasonWorker || "—"} per_chat=${this.perChat.size}`,
+      `[${NS}] lark.reason.get default=${this.defaultReasonWorker || "—"} per_chat=${this.perChat.size}`,
     );
   }
 
@@ -1048,7 +1010,6 @@ export class LarkWorker {
     return (
       `${LARK_README}\n\n## Current\n\n` +
       `- default reason worker: ${this.defaultReasonWorker || "—"}\n` +
-      `- fallback reason worker: ${this.fallbackReasonWorker || "—"}\n` +
       `- per-chat overrides: ${this.perChat.size}\n` +
       `- local-file dirs: ${dirs}\n` +
       `- approver: ${this.approver || "— (gating disabled)"}\n`

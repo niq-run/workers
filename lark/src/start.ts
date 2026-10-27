@@ -11,11 +11,9 @@
  * NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL, merged by the SDK helper
  * `busConnFromArgs`); forwards Feishu messages as worker.input to the default
  * worker named by NIQ_REASON_WORKER (overridable per-chat via --reason-mappings
- * / LARK_REASON_WORKER_MAPPINGS, a JSON object of {chat_id: worker_id}). When
- * neither a per-chat mapping nor the default resolves, messages go to the
- * last-resort fallback named by --fallback-reason-worker /
- * LARK_FALLBACK_REASON_WORKER. The chat→worker routing is persisted
- * (--state-file / LARK_STATE_FILE, default ./lark-reason-state.json).
+ * / LARK_REASON_WORKER_MAPPINGS, a JSON object of {chat_id: worker_id}). The
+ * chat→worker routing is persisted (--state-file / LARK_STATE_FILE, default
+ * ./lark-reason-state.json).
  *
  * Proactive reason→lark messages use lark.send with no target and fall back to
  * --default-user / LARK_DEFAULT_USER_ID (a Feishu open_id) when the reason
@@ -35,7 +33,6 @@ import {
   runWorkerApp,
 } from "@niq.run/worker-sdk";
 import {
-  DEFAULT_APPROVER,
   LarkWorker,
   larkConfigFromEnv,
   parseDirList,
@@ -49,8 +46,7 @@ function usage(): void {
       "  --worker-id <id>     bus identity (else NIQ_WORKER_ID)\n" +
       "  --credential <cred>  bus credential (else NIQ_WORKER_CREDENTIAL)\n" +
       "  lark: --app-id <id>, --app-secret <secret> (default: LARK_APP_ID / LARK_APP_SECRET), " +
-      "--default-user <open_id> (default: LARK_DEFAULT_USER_ID), --reason-worker <id> (default: NIQ_REASON_WORKER), " +
-      "--fallback-reason-worker <id> (default: LARK_FALLBACK_REASON_WORKER), " +
+      "--default-user <open_id> (default: LARK_DEFAULT_USER_ID), --reason-worker <id> (required; else NIQ_REASON_WORKER), " +
       "--reason-mappings <json> (default: LARK_REASON_WORKER_MAPPINGS; {chat_id: worker_id}), " +
       "--state-file <path> (default: LARK_STATE_FILE / ./lark-reason-state.json), " +
       "--allowed-file-dirs <dirs> (default: LARK_ALLOWED_FILE_DIRS; comma-separated directories local file sends may read from), " +
@@ -68,14 +64,11 @@ await runWorkerApp(async () => {
   const bus = new HTTPWorkerClient(busConnFromArgs(opts));
 
   const reasonWorkerID = String(
-    opts["reason-worker"] ?? process.env.NIQ_REASON_WORKER ?? process.env.LARK_REASON_WORKER ?? "",
+    opts["reason-worker"] ?? process.env.NIQ_REASON_WORKER ?? "",
   );
-  const fallbackReasonWorkerID = String(
-    opts["fallback-reason-worker"] ?? process.env.LARK_FALLBACK_REASON_WORKER ?? "",
-  );
-  if (!reasonWorkerID && !fallbackReasonWorkerID) {
+  if (!reasonWorkerID) {
     throw new Error(
-      "at least one of NIQ_REASON_WORKER / --reason-worker or LARK_FALLBACK_REASON_WORKER / --fallback-reason-worker must be set (bound reason worker id; fallback is the last resort)",
+      "NIQ_REASON_WORKER / --reason-worker must be set (the reason worker Feishu messages are forwarded to)",
     );
   }
 
@@ -83,24 +76,22 @@ await runWorkerApp(async () => {
   if (opts["app-id"] !== undefined) lark.appId = String(opts["app-id"]);
   if (opts["app-secret"] !== undefined) lark.appSecret = String(opts["app-secret"]);
   if (opts["domain"] !== undefined) lark.domain = String(opts["domain"]);
-  // Opt in to local file media sends (default-deny in @larksuite/channel). The
-  // flag overrides LARK_ALLOWED_FILE_DIRS, which larkConfigFromEnv already read.
-  const allowedFileDirs = parseDirList(
-    String(opts["allowed-file-dirs"] ?? process.env.LARK_ALLOWED_FILE_DIRS ?? ""),
-  );
-  if (allowedFileDirs) {
-    lark.channel = {
-      ...lark.channel,
-      outbound: { ...lark.channel?.outbound, allowedFileDirs },
-    };
+  // An explicit --approver overrides LARK_APPROVER (read by larkConfigFromEnv);
+  // an empty value disables allowlist approval gating.
+  if (opts["approver"] !== undefined) {
+    lark.approver = String(opts["approver"]).trim();
   }
-
-  // Runtime allowlist additions (`lark.dirs.add`) are gated on this worker;
-  // its own requests skip the gate. An explicit empty --approver disables it.
-  const approver =
-    opts["approver"] !== undefined
-      ? String(opts["approver"]).trim()
-      : process.env.LARK_APPROVER?.trim() || DEFAULT_APPROVER;
+  // Opt in to local file media sends (default-deny in @larksuite/channel). The
+  // env is read by larkConfigFromEnv; only an explicit flag overrides it.
+  if (opts["allowed-file-dirs"] !== undefined) {
+    const dirs = parseDirList(String(opts["allowed-file-dirs"]));
+    if (dirs) {
+      lark.channel = {
+        ...lark.channel,
+        outbound: { ...lark.channel?.outbound, allowedFileDirs: dirs },
+      };
+    }
+  }
   const defaultUserOpenId = String(opts["default-user"] ?? process.env.LARK_DEFAULT_USER_ID ?? "");
 
   // Optional initial chat → reason worker routing from config.
@@ -119,17 +110,17 @@ await runWorkerApp(async () => {
     reasonWorkerMappings = parsed as Record<string, string>;
   }
 
-  const stateFile = String(opts["state-file"] ?? process.env.LARK_STATE_FILE ?? "");
+  // The state file env is read by the worker (defaultStateFile); only an
+  // explicit flag is forwarded.
+  const stateFile = opts["state-file"] !== undefined ? String(opts["state-file"]) : "";
 
   const workerOpts: LarkBridgeOptions = {
     ...lark,
     bus,
-    ...(reasonWorkerID ? { reasonWorkerID } : {}),
-    ...(fallbackReasonWorkerID ? { fallbackReasonWorkerID } : {}),
+    reasonWorkerID,
     ...(reasonWorkerMappings ? { reasonWorkerMappings } : {}),
     ...(stateFile ? { stateFile } : {}),
     ...(defaultUserOpenId ? { defaultUserOpenId } : {}),
-    approver,
   };
 
   const worker = new LarkWorker(workerOpts);

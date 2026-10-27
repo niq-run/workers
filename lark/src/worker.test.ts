@@ -7,13 +7,12 @@ import {
   LARK_REASON_GET,
   LARK_DIRS_ADD,
   LARK_DIRS_GET,
-  WORKER_README,
   DEFAULT_APPROVER,
   buildSendInput,
   type LarkChannel,
   type LarkStateStore,
 } from "./worker.js";
-import type { Event, WorkerSideChannel } from "@niq.run/worker-sdk";
+import { EventType, type Event, type WorkerSideChannel } from "@niq.run/worker-sdk";
 
 function eventSink() {
   const queue: Event[] = [];
@@ -115,7 +114,6 @@ function fakeStateStore(initial: Record<string, unknown> = {}) {
 function makeWorker(opts: {
   bus: WorkerSideChannel;
   reasonWorkerID?: string;
-  fallbackReasonWorkerID?: string;
   reasonWorkerMappings?: Record<string, string>;
   stateStore?: any;
   echo?: boolean;
@@ -132,9 +130,6 @@ function makeWorker(opts: {
     createChannel: () => channel,
     bus: opts.bus,
     reasonWorkerID: opts.reasonWorkerID ?? "reason.0",
-    ...(opts.fallbackReasonWorkerID !== undefined
-      ? { fallbackReasonWorkerID: opts.fallbackReasonWorkerID }
-      : {}),
     stateStore: opts.stateStore ?? store,
     ...(opts.reasonWorkerMappings !== undefined
       ? { reasonWorkerMappings: opts.reasonWorkerMappings }
@@ -158,7 +153,12 @@ describe("larkConfigFromEnv", () => {
   it("reads app id/secret and defaults the domain", () => {
     expect(
       larkConfigFromEnv({ LARK_APP_ID: "cli_abc", LARK_APP_SECRET: "seg" }),
-    ).toEqual({ appId: "cli_abc", appSecret: "seg", domain: "https://open.feishu.cn" });
+    ).toEqual({
+      appId: "cli_abc",
+      appSecret: "seg",
+      domain: "https://open.feishu.cn",
+      approver: DEFAULT_APPROVER,
+    });
   });
 
   it("honors an explicit domain", () => {
@@ -169,6 +169,16 @@ describe("larkConfigFromEnv", () => {
         LARK_DOMAIN: "https://open.larksuite.com",
       }).domain,
     ).toBe("https://open.larksuite.com");
+  });
+
+  it("reads LARK_APPROVER (default webui-hiw; empty means the default)", () => {
+    const base = { LARK_APP_ID: "cli_a", LARK_APP_SECRET: "secret" };
+    expect(larkConfigFromEnv({ ...base, LARK_APPROVER: "admin-bot" }).approver).toBe(
+      "admin-bot",
+    );
+    expect(larkConfigFromEnv({ ...base, LARK_APPROVER: "" }).approver).toBe(
+      DEFAULT_APPROVER,
+    );
   });
 
   it("throws listing the missing variable(s)", () => {
@@ -290,7 +300,6 @@ describe("LarkWorker", () => {
       type: "object",
       properties: {
         default_reason_worker: { type: "string" },
-        fallback_reason_worker: { type: "string" },
         per_chat: { type: "object" },
       },
     });
@@ -308,7 +317,7 @@ describe("LarkWorker", () => {
     await flush();
     sink.push({
       id: "rd1",
-      type: WORKER_README,
+      type: EventType.WorkerReadme,
       status: "created",
       payload: {},
       worker_id: "reason.0",
@@ -764,7 +773,6 @@ describe("LarkWorker", () => {
     expect(forwarded!.targets).toEqual(["reason.9"]);
     expect(stateSaved.at(-1)).toEqual({
       default_reason_worker: "reason.9",
-      fallback_reason_worker: "",
       per_chat: {},
       allowed_file_dirs: [],
     });
@@ -837,7 +845,6 @@ describe("LarkWorker", () => {
     // A structured reply IS the payload: no result wrapper, no JSON string.
     expect(reply.evt.payload).toEqual({
       default_reason_worker: "reason.0",
-      fallback_reason_worker: "",
       per_chat: { oc_x: "reason.5" },
     });
 
@@ -845,69 +852,14 @@ describe("LarkWorker", () => {
     await running;
   });
 
-  it("falls back when there is no per-chat mapping or default", async () => {
+  it("drops a message when no reason worker resolves", async () => {
     const { bus, sent } = fakeBus();
-    // Explicitly empty default → routing must fall through to the fallback.
-    const { worker, getHandler } = makeWorker({
-      bus,
-      reasonWorkerID: "",
-      fallbackReasonWorkerID: "reason.FB",
-    });
+    // No default and no per-chat mapping → nothing to forward to.
+    const { worker, getHandler } = makeWorker({ bus, reasonWorkerID: "" });
 
     await worker.connect();
     await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
-    expect(sent[0].targets).toEqual(["reason.FB"]);
-  });
-
-  it("sets the fallback via lark.reason.set and persists it", async () => {
-    const { bus, sink, sent } = fakeBus();
-    const { worker, getHandler, stateSaved } = makeWorker({ bus, reasonWorkerID: "" });
-
-    const running = worker.run();
-    await flush();
-    sink.push({
-      id: "rf1",
-      type: LARK_REASON_SET,
-      status: "created",
-      payload: { fallback: true, worker_id: "reason.FB" },
-      worker_id: "admin.0",
-      request_id: "call-set-fb",
-      timestamp: Date.now(),
-    });
-    await flush();
-
-    const reply = sent[sent.length - 1];
-    expect(reply.evt.type).toBe("request.completed");
-    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
-    const forwarded = sent.find((s) => s.evt.type === "worker.input");
-    expect(forwarded!.targets).toEqual(["reason.FB"]);
-    expect(stateSaved.at(-1)).toEqual({
-      default_reason_worker: "",
-      fallback_reason_worker: "reason.FB",
-      per_chat: {},
-      allowed_file_dirs: [],
-    });
-
-    sink.end();
-    await running;
-  });
-
-  it("restores a persisted fallback worker on connect", async () => {
-    const store: LarkStateStore = {
-      load: async () => ({ fallback_reason_worker: "reason.FB", per_chat: {} }),
-      save: async () => {},
-    };
-    const { bus, sent } = fakeBus();
-    // No default from config; the persisted state only carries a fallback → it must be used.
-    const { worker, getHandler } = makeWorker({
-      bus,
-      reasonWorkerID: "",
-      stateStore: store,
-    });
-
-    await worker.connect();
-    await getHandler()({ chatId: "oc_1", messageId: "m1", content: "hi", senderId: "ou_1" });
-    expect(sent[0].targets).toEqual(["reason.FB"]);
+    expect(sent).toHaveLength(0);
   });
 });
 

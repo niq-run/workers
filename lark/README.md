@@ -30,14 +30,13 @@ worker and per-chat routing come from env or flags (see Config). See
 | Feishu app secret | `LARK_APP_SECRET` | `--app-secret` | _(required)_ |
 | Feishu/Lark domain | `LARK_DOMAIN` | `--domain` | `https://open.feishu.cn` |
 | Proactive message recipient | `LARK_DEFAULT_USER_ID` | `--default-user` | — |
-| **Default reason worker** | `NIQ_REASON_WORKER` | `--reason-worker` | — |
-| **Fallback reason worker** | `LARK_FALLBACK_REASON_WORKER` | `--fallback-reason-worker` | — |
+| **Default reason worker** | `NIQ_REASON_WORKER` | `--reason-worker` | _(required)_ |
 | **Per-chat routing** | `LARK_REASON_WORKER_MAPPINGS` | `--reason-mappings` | `{}` |
 | Persisted routing state | `LARK_STATE_FILE` | `--state-file` | `./lark-reason-state.json` |
 | Local file send allowlist | `LARK_ALLOWED_FILE_DIRS` | `--allowed-file-dirs` | _(none — local file sends rejected)_ |
 | Allowlist approver | `LARK_APPROVER` | `--approver` | `webui-hiw` (`""` disables gating) |
 
-At least one of the default or fallback reason worker must be configured.
+The default reason worker (`NIQ_REASON_WORKER`) must be configured.
 
 ### Sending local files
 
@@ -100,8 +99,8 @@ lark.dirs.add { path: "/var/niq/outbox2" }
 | `worker.readme` | `{}` | `request.completed` → the usage guide (including live routing/allowlist state) |
 | `worker.help` | `{ event_name?: string, params?: object }` | `request.completed` → the event index (no `event_name`) or that event's help (declared contract, like a CLI's `-h`); `request.failed` for an event lark does not serve |
 | `lark.send` | `{ target?, text? }` — or one of `image` / `file` / `video` / `audio` (http(s) URL or local path; `file` takes `file_name`) to send media | `request.completed` → `"sent"`; `request.failed` if no target / no text or media / send error |
-| `lark.reason.set` | `{ worker_id: string, chat_id?: string, fallback?: boolean }` | `request.completed` → `"ok"`; `request.failed` on error |
-| `lark.reason.get` | `{}` | `request.completed` → `{ default_reason_worker, fallback_reason_worker, per_chat }` (a structured object, not a JSON string) |
+| `lark.reason.set` | `{ worker_id: string, chat_id?: string }` | `request.completed` → `"ok"`; `request.failed` on error |
+| `lark.reason.get` | `{}` | `request.completed` → `{ default_reason_worker, per_chat }` (a structured object, not a JSON string) |
 | `lark.dirs.add` | `{ path: string }` (absolute or `~/`; missing dirs are allowed) | `request.completed` → `{ dirs, added }`; `request.failed` if `path` is missing, the approval is denied, or the approval request could not be delivered |
 | `lark.dirs.get` | `{}` | `request.completed` → `{ dirs, approver }` |
 
@@ -118,11 +117,11 @@ learns lark's tools.
 
 | Event | Payload | Destination |
 |---|---|---|
-| `worker.input` | `{ text, chat_id, sender_open_id, input_mode: "append" }` | bound reason worker (per-chat → default → fallback) |
+| `worker.input` | `{ text, chat_id, sender_open_id, input_mode: "append" }` | bound reason worker (per-chat → default) |
 | `worker.ready` | `{ type: "lark", watch, publishes }` | broadcast (transient presence) |
 | `approval.request` | `{ origin, requested_by, action: "lark.dirs.add", path, exists, dirs }` | approver (only for a non-approver `lark.dirs.add`) |
 
-Routing resolution for each Feishu message: `per_chat[chat_id] ?? default(reason-worker) ?? fallback(fallback-reason-worker)`. Routing state and runtime allowlist additions are persisted to `LARK_STATE_FILE` across restarts. lark also **consumes** `approval.decision` (directed from the approver) to resolve a parked `lark.dirs.add`.
+Routing resolution for each Feishu message: `per_chat[chat_id] ?? default(reason-worker)`. Routing state and runtime allowlist additions are persisted to `LARK_STATE_FILE` across restarts. lark also **consumes** `approval.decision` (directed from the approver) to resolve a parked `lark.dirs.add`.
 
 ## Usage in code
 
