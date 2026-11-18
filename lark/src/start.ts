@@ -6,14 +6,19 @@
  *
  *   node dist/start.js [--key value ...]
  *
+ * The worker is an interface worker (the niq side — identity, presence, tool
+ * dispatch, replies — comes from the shared SDK base) whose backend is the
+ * Feishu bridge.
+ *
  * Feishu long-connection + bus bridge to reason workers. Connects to Feishu
  * (LARK_APP_ID / LARK_APP_SECRET) and the bus (NIQ_BUS_URL /
  * NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL, merged by the SDK helper
  * `busConnFromArgs`); forwards Feishu messages as worker.input to the default
  * worker named by NIQ_REASON_WORKER (overridable per-chat via --reason-mappings
  * / LARK_REASON_WORKER_MAPPINGS, a JSON object of {chat_id: worker_id}). The
- * chat→worker routing is persisted (--state-file / LARK_STATE_FILE, default
- * ./lark-reason-state.json).
+ * chat→worker routing is persisted (--state-file / LARK_STATE_FILE, else
+ * $NIQ_STATE_DIR/lark-state.json — the directory the niq supervisor gives every
+ * managed-process worker).
  *
  * Proactive reason→lark messages use lark.send with no target and fall back to
  * --default-user / LARK_DEFAULT_USER_ID (a Feishu open_id) when the reason
@@ -24,7 +29,7 @@
  * LARK_ALLOWED_FILE_DIRS (comma-separated absolute directories) to permit them.
  * The allowlist can also be extended at runtime with `lark.dirs.add`, which is
  * gated on the approver worker (--approver / LARK_APPROVER, default
- * `webui-hiw`); approved additions are persisted to the state file.
+ * `webui`); approved additions are persisted to the state file.
  */
 import {
   HTTPWorkerClient,
@@ -36,7 +41,7 @@ import {
   LarkWorker,
   larkConfigFromEnv,
   parseDirList,
-  type LarkBridgeOptions,
+  type LarkWorkerOptions,
 } from "./worker.js";
 
 function usage(): void {
@@ -48,9 +53,9 @@ function usage(): void {
       "  lark: --app-id <id>, --app-secret <secret> (default: LARK_APP_ID / LARK_APP_SECRET), " +
       "--default-user <open_id> (default: LARK_DEFAULT_USER_ID), --reason-worker <id> (required; else NIQ_REASON_WORKER), " +
       "--reason-mappings <json> (default: LARK_REASON_WORKER_MAPPINGS; {chat_id: worker_id}), " +
-      "--state-file <path> (default: LARK_STATE_FILE / ./lark-reason-state.json), " +
+      "--state-file <path> (default: LARK_STATE_FILE, else $NIQ_STATE_DIR/lark-state.json), " +
       "--allowed-file-dirs <dirs> (default: LARK_ALLOWED_FILE_DIRS; comma-separated directories local file sends may read from), " +
-      "--approver <worker-id> (default: LARK_APPROVER / webui-hiw; empty string disables approval gating)",
+      "--approver <worker-id> (default: LARK_APPROVER / webui; empty string disables approval gating)",
   );
 }
 
@@ -114,7 +119,7 @@ await runWorkerApp(async () => {
   // explicit flag is forwarded.
   const stateFile = opts["state-file"] !== undefined ? String(opts["state-file"]) : "";
 
-  const workerOpts: LarkBridgeOptions = {
+  const workerOpts: LarkWorkerOptions = {
     ...lark,
     bus,
     reasonWorkerID,

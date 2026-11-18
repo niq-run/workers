@@ -7,6 +7,39 @@ Feishu chat (`lark.send`). Chat → worker routing is persistent and can be
 reconfigured at runtime (`lark.reason.*`). Built on
 [`@niq.run/worker-sdk`](https://www.npmjs.com/package/@niq.run/worker-sdk).
 
+## Shape: an interface worker with a Feishu backend
+
+This worker is split in two, and the split is the point:
+
+| Half | Owns | Where |
+|---|---|---|
+| `InterfaceWorker` (SDK) | the **niq side**: identity, ACL, presence, `worker.discover`, tool dispatch, replies, request correlation | `@niq.run/worker-sdk` |
+| `LarkBackend` | the **Feishu side**: the long connection, chat → reason routing, the local-file allowlist, append-to-one-message, approval-gated `lark.dirs.add` | `src/backend.ts` |
+
+The worker is assembled in `src/worker.ts`:
+
+```ts
+const backend = new LarkBackend(opts);           // capability
+const worker = new InterfaceWorker({             // bus participation
+  id: bus.id, channel: bus, type: "lark",
+  backends: [backend],
+});
+backend.registerTools(worker);                   // the tools it serves
+await worker.start();                             // inject → connect Feishu → announce → serve
+```
+
+`InterfaceWorker.start()` is the contract in order: connect the bus, call
+`backend.setHandler(handler)` (so the backend can reach inward before anything
+arrives), let the backend start its own lifetime (connect Feishu, load persisted
+routing), announce presence, then serve. Nothing in the Feishu half touches the
+bus channel directly — it publishes through the injected handler, which is what
+lets the same niq side serve a different outward surface later (another chat
+platform, a TUI).
+
+The same shape exists in Go as `core/impl/iface` (the base) plus
+`core/impl/workers/niq` (a backend), so a bridge written here and one written in
+Go behave the same on the bus.
+
 ## Run
 
 ```sh
@@ -32,9 +65,9 @@ worker and per-chat routing come from env or flags (see Config). See
 | Proactive message recipient | `LARK_DEFAULT_USER_ID` | `--default-user` | — |
 | **Default reason worker** | `NIQ_REASON_WORKER` | `--reason-worker` | _(required)_ |
 | **Per-chat routing** | `LARK_REASON_WORKER_MAPPINGS` | `--reason-mappings` | `{}` |
-| Persisted routing state | `LARK_STATE_FILE` | `--state-file` | `./lark-reason-state.json` |
+| Persisted routing state | `LARK_STATE_FILE` | `--state-file` | `$NIQ_STATE_DIR/lark-state.json`, else `./lark-state.json` |
 | Local file send allowlist | `LARK_ALLOWED_FILE_DIRS` | `--allowed-file-dirs` | _(none — local file sends rejected)_ |
-| Allowlist approver | `LARK_APPROVER` | `--approver` | `webui-hiw` (`""` disables gating) |
+| Allowlist approver | `LARK_APPROVER` | `--approver` | `webui` (`""` disables gating) |
 
 The default reason worker (`NIQ_REASON_WORKER`) must be configured.
 
@@ -74,7 +107,7 @@ lark.dirs.add { path: "/var/niq/outbox2" }
 ```
 
 - Requests from the **approver** worker (`LARK_APPROVER` / `--approver`, default
-  `webui-hiw`) are treated as consent and applied immediately — the approver
+  `webui`) are treated as consent and applied immediately — the approver
   already decided.
 - Requests from **any other worker** are parked: lark sends an
   `approval.request` (`{ action: "lark.dirs.add", path, exists, dirs, origin }`)
@@ -86,7 +119,7 @@ lark.dirs.add { path: "/var/niq/outbox2" }
 - The change takes effect on the **live** channel: the SDK re-reads the
   allowlist on every send, so no reconnect is needed.
 - Set `--approver ""` explicitly to disable gating (all adds apply directly).
-  An empty `LARK_APPROVER` still means the default `webui-hiw`. There is
+  An empty `LARK_APPROVER` still means the default `webui`. There is
   intentionally no remove/unset event — narrowing the allowlist stays a
   deploy-time decision.
 

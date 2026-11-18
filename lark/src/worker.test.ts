@@ -171,7 +171,7 @@ describe("larkConfigFromEnv", () => {
     ).toBe("https://open.larksuite.com");
   });
 
-  it("reads LARK_APPROVER (default webui-hiw; empty means the default)", () => {
+  it("reads LARK_APPROVER (defaults to the interface worker; empty means the default)", () => {
     const base = { LARK_APP_ID: "cli_a", LARK_APP_SECRET: "secret" };
     expect(larkConfigFromEnv({ ...base, LARK_APPROVER: "admin-bot" }).approver).toBe(
       "admin-bot",
@@ -447,14 +447,14 @@ describe("LarkWorker", () => {
       type: "worker.discover",
       status: "created",
       payload: {},
-      worker_id: "webui-hiw",
+      worker_id: DEFAULT_APPROVER,
       timestamp: Date.now(),
     });
     await flush();
 
     const reply = sent.find((s) => s.evt.type === "worker.ready");
     expect(reply).toBeDefined();
-    expect(reply!.targets).toEqual(["webui-hiw"]);
+    expect(reply!.targets).toEqual([DEFAULT_APPROVER]);
     expect(reply!.evt.transient).toBe(true);
     const watch = reply!.evt.payload.watch as Array<Record<string, any>>;
     expect(watch.map((w) => w.event)).toContain("lark.send");
@@ -1028,7 +1028,7 @@ describe("lark.dirs.* (runtime allowlist)", () => {
       id: "bus-fail",
       type: "request.failed",
       status: "routed",
-      payload: { error: "target is not online: webui-hiw" },
+      payload: { error: `target is not online: ${DEFAULT_APPROVER}` },
       worker_id: DEFAULT_APPROVER,
       request_id: approval.evt.id,
       timestamp: Date.now(),
@@ -1039,7 +1039,7 @@ describe("lark.dirs.* (runtime allowlist)", () => {
     expect(reply.evt.type).toBe("request.failed");
     expect(reply.evt.request_id).toBe("call-d4");
     expect((reply.evt.payload as any).error).toBe(
-      "approval request failed: target is not online: webui-hiw",
+      `approval request failed: target is not online: ${DEFAULT_APPROVER}`,
     );
 
     sink.end();
@@ -1319,3 +1319,105 @@ describe("buildSendInput", () => {
 function flush(): Promise<void> {
   return new Promise((r) => setImmediate(r));
 }
+
+// The interface-worker split is the point of this rewrite, so the wiring itself
+// is under test: injection order, whom a reply is addressed to, and what the
+// worker must NOT answer.
+describe("interface worker wiring", () => {
+  it("gives the backend its handler before Feishu is connected", async () => {
+    const { bus } = fakeBus();
+    const { channel } = fakeChannel();
+    const order: string[] = [];
+    const createChannel = vi.fn((_opts: any) => {
+      order.push("feishu:create");
+      return channel;
+    });
+    const connected = channel.connect as unknown as () => Promise<void>;
+    (channel as any).connect = vi.fn(async () => {
+      order.push("feishu:connect");
+      await connected();
+    });
+
+    const worker = new LarkWorker({
+      appId: "cli_a",
+      appSecret: "secret",
+      createChannel,
+      bus,
+      reasonWorkerID: "reason.0",
+      stateStore: fakeStateStore().store,
+    });
+    await worker.connect();
+
+    // The bus connection comes first (the handler must exist before any backend
+    // starts), and Feishu is connected by the backend's own lifetime.
+    expect((bus.connect as any).mock.invocationCallOrder[0]).toBeLessThan(
+      (channel.connect as any).mock.invocationCallOrder[0],
+    );
+    expect(order).toEqual(["feishu:create", "feishu:connect"]);
+  });
+
+  it("does not answer an approval decision with request.failed", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus, allowedFileDirs: ["/seed"] });
+
+    const running = worker.run();
+    await flush();
+    // An approval.decision nobody parked: it is a consumed event, not an unserved
+    // tool, so the worker must stay silent rather than fail the caller.
+    sink.push({
+      id: "d9",
+      type: "approval.decision",
+      status: "created",
+      payload: { approved: true },
+      worker_id: DEFAULT_APPROVER,
+      request_id: "unknown-req",
+      timestamp: Date.now(),
+    });
+    await flush();
+
+    expect(sent).toHaveLength(0);
+    sink.end();
+    await running;
+  });
+
+  it("disconnects Feishu when the worker stops", async () => {
+    const { bus } = fakeBus();
+    const { worker, channel } = makeWorker({ bus });
+    await worker.connect();
+    await worker.close();
+    expect(channel.disconnect).toHaveBeenCalled();
+  });
+
+  it("keeps serving after a Feishu handler error", async () => {
+    const { bus, sink, sent } = fakeBus();
+    const { worker } = makeWorker({ bus });
+    const running = worker.run();
+    await flush();
+
+    // Two tool calls in a row: work in flight for one must not stop the loop for
+    // the next.
+    sink.push({
+      id: "c1",
+      type: LARK_REASON_GET,
+      status: "created",
+      payload: {},
+      worker_id: "reason.0",
+      request_id: "call-1",
+      timestamp: Date.now(),
+    });
+    sink.push({
+      id: "c2",
+      type: LARK_REASON_GET,
+      status: "created",
+      payload: {},
+      worker_id: "reason.0",
+      request_id: "call-2",
+      timestamp: Date.now(),
+    });
+    await flush();
+    expect(sent.map((s) => s.evt.request_id)).toEqual(["call-1", "call-2"]);
+
+    sink.end();
+    await running;
+  });
+});
