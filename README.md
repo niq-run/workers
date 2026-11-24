@@ -23,9 +23,10 @@ Flat, one directory per worker:
 workers/
 ├── package.json     # npm workspace root — an entry exists for each worker below
 ├── tsconfig.base.json
-├── hello/           # @niq.run/hello-worker  — minimal demo (bin: niq-hello)
-├── lark/            # @niq.run/lark-worker   — Feishu WebSocket bridge (bin: niq-lark)
-└── tavily/          # @niq.run/tavily-worker — web search (bin: niq-tavily)
+├── hello/           # @niq.run/hello-worker     — minimal demo (bin: niq-hello)
+├── agent-interface/ # @niq.run/agent-interface-worker — agent interface, CLI form (bin: niq-agent)
+├── lark/            # @niq.run/lark-worker      — Feishu WebSocket bridge (bin: niq-lark)
+└── tavily/          # @niq.run/tavily-worker    — web search (bin: niq-tavily)
 ```
 
 - Each worker is an independent npm package with its own `bin`, e.g.
@@ -46,6 +47,19 @@ npm install -g @niq.run/lark-worker
 npm install -g @niq.run/tavily-worker
 ```
 
+Install the agent interface worker from npm:
+
+```sh
+npm install -g @niq.run/agent-interface-worker
+```
+
+Or build it from this checkout:
+
+```sh
+npm ci -w agent-interface
+npm install -g ./agent-interface --install-links
+```
+
 Then run each worker's own launcher, or import it in code:
 
 ```ts
@@ -57,8 +71,35 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 | Package | Launcher | Description |
 |---|---|---|
 | `@niq.run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
+| `@niq.run/agent-interface-worker` | `niq-agent` | Agent interface worker (CLI form): dials a niq bus from the shell (multi-source credential file matching the WebUI's remote-worker connect block), sends directed events, requests a reply, streams events. Ships a companion agent skill (`niq-agent skill install`) |
 | `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
 | `@niq.run/tavily-worker` | `niq-tavily` | Web-search bridge: answers `tavily.search` requests with the Tavily answer + top sources |
+
+## Agent bootstrap: agent-interface from a repo URL
+
+Given only this repository's URL, an agent can install the agent-interface CLI
+and its skill, then dial a niq bus:
+
+```sh
+git clone https://github.com/niq-run/workers.git
+cd workers
+npm ci -w agent-interface
+npm install -g ./agent-interface --install-links
+niq-agent skill install
+
+# with the connect block copied from the niq WebUI for a remote worker:
+niq-agent config import 11 --from-file ./block.txt
+niq-agent ping --source 11
+niq-agent say "hello" --target reason.0 --source 11
+```
+
+The skill is also readable without installing:
+[`agent-interface/skills/niq-agent-interface/SKILL.md`](agent-interface/skills/niq-agent-interface/SKILL.md).
+Full details: [`agent-interface/README.md`](agent-interface/README.md).
+
+Sends are directed only and there is no implicit target: if the id is unknown,
+the agent must ask the user. In many projects the main reason worker is named
+`niq` — a common candidate, not a default.
 
 ## Add a worker
 
@@ -66,7 +107,9 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
    class + config helpers, importable in-process or by tests) plus `src/start.ts`
    (the `#!/usr/bin/env node` entrypoint compiled to `dist/start.js`, which is what
    the package `bin` points at — this is what makes the worker usable as a standalone
-   app run with one command). Add a `package.json` with the `bin` field, and a
+   app run with one command). A CLI-shaped worker (`agent-interface`) keeps its command
+   surface in `src/cli.ts` and uses `start.ts` only as the thin process wrapper.
+   Add a `package.json` with the `bin` field, and a
    `tsconfig.json` extending `../tsconfig.base.json`.
 2. Register it in the `workspaces` array of the root `package.json`.
 3. Add tests, then run `npm test`, `npm run typecheck`, and `npm run build` from

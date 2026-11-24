@@ -5,6 +5,7 @@
   "description": "niq extension workers — each worker is an independent package under this repo.",
   "workspaces": [
     "hello",
+    "agent-interface",
     "lark",
     "tavily"
   ],

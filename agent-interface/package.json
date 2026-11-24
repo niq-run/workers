@@ -1,0 +1,45 @@
+{
+  "name": "@niq.run/agent-interface-worker",
+  "version": "0.2.0",
+  "description": "Agent interface worker for niq (CLI form) — dial a niq event bus from the shell, send directed events, request a capability reply, or stream bus events. Credentials come from a local multi-source file matching the WebUI's remote-worker connect block.",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "bin": {
+    "niq-agent": "./dist/start.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niq-run/workers.git"
+  },
+  "homepage": "https://www.npmjs.com/package/@niq.run/agent-interface-worker",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
+  },
+  "dependencies": {
+    "@niq.run/worker-sdk": "^0.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
