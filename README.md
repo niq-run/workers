@@ -26,6 +26,7 @@ workers/
 ├── hello/           # @niq.run/hello-worker     — minimal demo (bin: niq-hello)
 ├── agent-interface/ # @niq.run/agent-interface-worker — agent interface, CLI form (bin: niq-agent)
 ├── lark/            # @niq.run/lark-worker      — Feishu WebSocket bridge (bin: niq-lark)
+├── msp/             # @niq.run/msp-worker       — MSP world bridge (bin: niq-msp)
 └── tavily/          # @niq.run/tavily-worker    — web search (bin: niq-tavily)
 ```
 
@@ -53,7 +54,15 @@ Install the agent interface worker from npm:
 npm install -g @niq.run/agent-interface-worker
 ```
 
-Or build it from this checkout:
+`@niq.run/msp-worker` is not on npm yet (its MSP SDK is vendored): install it
+from this checkout.
+
+```sh
+npm ci -w msp
+npm install -g ./msp --install-links
+```
+
+Or build any worker from this checkout:
 
 ```sh
 npm ci -w agent-interface
@@ -73,6 +82,7 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 | `@niq.run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
 | `@niq.run/agent-interface-worker` | `niq-agent` | Agent interface worker (CLI form): dials a niq bus from the shell (multi-source credential file matching the WebUI's remote-worker connect block), sends directed events, requests a reply, streams events. Ships a companion agent skill (`niq-agent skill install`) |
 | `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
+| `@niq.run/msp-worker` | `niq-msp` | MSP world bridge: joins an MSP world through the vendored MSP TypeScript SDK, serves `msp.nodes` / `msp.call` / `msp.publish` / `msp.manifest` to niq, exposes `niq_call` / `niq_send` to MSP peers, and forwards inbound MSP signals as niq events |
 | `@niq.run/tavily-worker` | `niq-tavily` | Web-search bridge: answers `tavily.search` requests with the Tavily answer + top sources |
 
 ## Agent bootstrap: agent-interface from a repo URL

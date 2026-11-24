@@ -1,0 +1,47 @@
+{
+  "name": "@niq.run/msp-worker",
+  "version": "0.1.0",
+  "description": "MSP interface worker for niq — connects to an MSP world through the msp-ts SDK (vendored), exposes MSP tools/signals as niq capabilities, and lets MSP peers call back into niq.",
+  "type": "module",
+  "main": "./dist/worker.js",
+  "types": "./dist/worker.d.ts",
+  "bin": {
+    "niq-msp": "./dist/start.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "VENDORED.md",
+    "VENDORED-MSP-TS-LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niq-run/workers.git"
+  },
+  "homepage": "https://www.npmjs.com/package/@niq.run/msp-worker",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
+  },
+  "dependencies": {
+    "@niq.run/worker-sdk": "^0.10.0",
+    "@sinclair/typebox": "^0.34.52"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "license": "MIT"
+}
