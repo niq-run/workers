@@ -35,9 +35,9 @@ creating a **remote** worker.
 ## Quick start (from this repository)
 
 An agent given the repository URL (`https://github.com/niq-run/workers`) can
-install from a checkout and run this end to end. The package will be published as
-`@niq.run/interface-worker`; until that rename is published, only the old
-`@niq.run/agent-interface-worker` is on npm (see [Install](#install)).
+install from a checkout and run this end to end. The package is published as
+`@niq.run/interface-worker`, so `npm install -g @niq.run/interface-worker` is the
+shorter path (see [Install](#install)).
 
 ```sh
 # 1. install the CLI (Node 18+)
@@ -105,9 +105,8 @@ npm install -g @niq.run/interface-worker   # gives the `niq-interface` command
 npx -y @niq.run/interface-worker --help    # or run without installing
 ```
 
-> Not published under the new name yet. Until it is, use
-> `npm install -g @niq.run/agent-interface-worker` (identical CLI, bin
-> `niq-agent`), or install from this repository below.
+The previous name, `@niq.run/agent-interface-worker`, is deprecated on npm and
+points here. Installing it still works for one release (bin `niq-agent`).
 
 ### From this repository
 

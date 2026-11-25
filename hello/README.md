@@ -16,10 +16,6 @@ Built on [`@niq.run/worker-sdk`](https://www.npmjs.com/package/@niq.run/worker-s
 npx @niq.run/hello-worker          # or: npm install -g @niq.run/hello-worker && niq-hello
 ```
 
-> This guide describes the version in this repository (0.2.0). Until that is
-> published, the npm release still carries the older 0.1.0 worker — install from
-> a checkout to follow along: `npm ci -w hello && npm install -g ./hello --install-links`.
-
 ---
 
 ## 1. What a worker is

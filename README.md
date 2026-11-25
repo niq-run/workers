@@ -52,9 +52,9 @@ Install the interface worker from npm:
 npm install -g @niq.run/interface-worker
 ```
 
-> The rename from `@niq.run/agent-interface-worker` lives in this repo but is not
-> published yet. Until `@niq.run/interface-worker` is on npm, install from this
-> checkout, or use the old package name (identical CLI, bin `niq-agent`).
+> Renamed from `@niq.run/agent-interface-worker`, which is deprecated on npm and
+> points here. Installing the old name still works for one release (bin
+> `niq-agent`).
 
 `@niq.run/msp-worker` is not on npm yet (its MSP SDK is vendored): install it
 from this checkout.
