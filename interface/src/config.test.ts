@@ -19,7 +19,7 @@ import {
 const temps: string[] = [];
 
 function tempConfigPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), "niq-agent-"));
+  const dir = mkdtempSync(join(tmpdir(), "niq-interface-"));
   temps.push(dir);
   return join(dir, "interface.json");
 }
@@ -86,7 +86,7 @@ describe("parseImportText", () => {
     }
   });
 
-  it("reads a full agent-interface config", () => {
+  it("reads a full interface-worker config", () => {
     const parsed = parseImportText(
       JSON.stringify({
         version: 1,

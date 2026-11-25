@@ -44,10 +44,10 @@ import {
 import { CliError, EXIT_OK, usageError } from "./errors.js";
 
 /** The package name, used in `--version` and error prefixes. */
-export const PACKAGE_NAME = "@niq.run/agent-interface-worker";
+export const PACKAGE_NAME = "@niq.run/interface-worker";
 
 /** The companion skill's directory name (matches its frontmatter `name`). */
-const SKILL_NAME = "niq-agent-interface";
+const SKILL_NAME = "niq-interface";
 
 /** Commands that only dial the bus take these. */
 const DIAL_FLAGS = [
@@ -134,7 +134,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return await cmdSkill(rest, parsed.flags, ctx);
       default:
         throw usageError(
-          `unknown command: ${command} (run 'niq-agent help')`,
+          `unknown command: ${command} (run 'niq-interface help')`,
         );
     }
   } catch (err) {
@@ -145,7 +145,7 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
             cause: err,
           });
     if (e.detail !== undefined) io.out(JSON.stringify(e.detail, null, 2));
-    io.err(`niq-agent: ${e.message}`);
+    io.err(`niq-interface: ${e.message}`);
     return e.exitCode;
   }
 }
@@ -161,7 +161,7 @@ async function cmdSend(
   const [type, ...extra] = rest;
   if (!type) {
     throw usageError(
-      "send needs an event type: niq-agent send <event-type> [--target <id>] [-d <json>]",
+      "send needs an event type: niq-interface send <event-type> [--target <id>] [-d <json>]",
     );
   }
   if (extra.length > 0) throw usageError(`unexpected argument: ${extra[0]}`);
@@ -217,7 +217,7 @@ async function cmdRequest(
   const [type, ...extra] = rest;
   if (!type) {
     throw usageError(
-      "request needs an event type: niq-agent request <event-type> --target <id> [-d <json>]",
+      "request needs an event type: niq-interface request <event-type> --target <id> [-d <json>]",
     );
   }
   if (extra.length > 0) throw usageError(`unexpected argument: ${extra[0]}`);
@@ -274,7 +274,7 @@ async function cmdSay(
   const text = rest.join(" ").trim();
   if (!text) {
     throw usageError(
-      "say needs text: niq-agent say <text> --target <worker-id>",
+      "say needs text: niq-interface say <text> --target <worker-id>",
     );
   }
   const targets = unique(flagList(flags, "target"));
@@ -358,7 +358,7 @@ async function cmdListen(
           // A stderr readiness line is the synchronisation point for a caller
           // that starts this in the background and then publishes.
           ctx.io.err(
-            `niq-agent: listening on ${dial.source} as ${dial.workerID} ` +
+            `niq-interface: listening on ${dial.source} as ${dial.workerID} ` +
               `(types: ${types.length > 0 ? types.join(", ") : "*"})`,
           );
         },
@@ -488,7 +488,7 @@ async function cmdConfig(
       const [name, ...extra] = args;
       if (!name) {
         throw usageError(
-          "config add needs a name: niq-agent config add <name> --bus-url <url> --worker-id <id> --credential <cred>",
+          "config add needs a name: niq-interface config add <name> --bus-url <url> --worker-id <id> --credential <cred>",
         );
       }
       if (extra.length > 0) throw usageError(`unexpected argument: ${extra[0]}`);
@@ -548,11 +548,11 @@ async function cmdConfig(
         if (!name) {
           throw usageError(
             "config import needs a name when reading a connect block from stdin " +
-              "(or pass --from-file <path> with a full agent-interface JSON config)",
+              "(or pass --from-file <path> with a full interface-worker JSON config)",
           );
         }
         ctx.io.err(
-          "niq-agent: reading the connect block or config JSON from stdin (end with Ctrl-D)",
+          "niq-interface: reading the connect block or config JSON from stdin (end with Ctrl-D)",
         );
         text = await ctx.io.readStdin();
       }
@@ -571,7 +571,7 @@ async function cmdConfig(
         if (!name) {
           throw usageError(
             "config import needs a name for a single connect block: " +
-              "niq-agent config import <name> --from-file <path>",
+              "niq-interface config import <name> --from-file <path>",
           );
         }
         upsertSource(config, name, parsed.source, { force, makeDefault });
@@ -585,7 +585,7 @@ async function cmdConfig(
       if (name) {
         throw usageError(
           "a full config file carries its own source names; omit <name> " +
-            "(niq-agent config import --from-file <path>)",
+            "(niq-interface config import --from-file <path>)",
         );
       }
       const imported = Object.keys(parsed.config.sources).sort();
@@ -664,7 +664,7 @@ async function cmdConfig(
 // ── skill ──
 
 /**
- * The companion skill ships inside the package (`skills/niq-agent-interface`).
+ * The companion skill ships inside the package (`skills/niq-interface`).
  * These subcommands make it reachable after a global install: print it, find
  * it, or copy it into an agent's skills directory.
  */
@@ -815,7 +815,7 @@ function viewSource(
 }
 
 function warn(ctx: CliContext, warnings: string[]): void {
-  for (const w of warnings) ctx.io.err(`niq-agent: warning: ${w}`);
+  for (const w of warnings) ctx.io.err(`niq-interface: warning: ${w}`);
 }
 
 function unique(values: string[]): string[] {
@@ -937,10 +937,14 @@ function commandHelp(name: string | undefined): string {
   }
 }
 
-const ROOT_HELP = `niq-agent — a command-line worker that talks to a niq event bus
+const ROOT_HELP = `niq-interface — the generic interface worker (CLI form) for a niq event bus
+
+The bus sees an ordinary remote-worker identity. Each invocation dials as that
+identity, does one thing, and exits; long-lived forms (mcp / tui / serve) are
+planned behind the same binary.
 
 Usage:
-  niq-agent <command> [arguments] [options]
+  niq-interface <command> [arguments] [options]
 
 Commands:
   send <event-type>       Publish one directed event (--target required)
@@ -968,9 +972,9 @@ Resolution order: --source > NIQ_BUS_URL/NIQ_WORKER_ID/NIQ_WORKER_CREDENTIAL
 Output: JSON on stdout (NDJSON for listen); diagnostics on stderr.
 Exit codes: 0 ok, 1 failure, 2 usage error.
 
-Run 'niq-agent help <command>' for command details.`;
+Run 'niq-interface help <command>' for command details.`;
 
-const SEND_HELP = `Usage: niq-agent send <event-type> --target <id>… [options]
+const SEND_HELP = `Usage: niq-interface send <event-type> --target <id>… [options]
 
 Publish one directed event. Broadcast is intentionally disabled: every send
 needs at least one --target. If the caller does not know the id, ask the user.
@@ -986,10 +990,10 @@ Options:
   plus the dial options.
 
 Example:
-  niq-agent send ops.notice --target niq -d '{"text":"deploy done"}'
-  niq-agent send worker.input --target reason.0 -d '{"text":"hi"}'`;
+  niq-interface send ops.notice --target niq -d '{"text":"deploy done"}'
+  niq-interface send worker.input --target reason.0 -d '{"text":"hi"}'`;
 
-const REQUEST_HELP = `Usage: niq-agent request <event-type> --target <id> [options]
+const REQUEST_HELP = `Usage: niq-interface request <event-type> --target <id> [options]
 
 Send a directed event carrying a fresh request_id and wait for the matching
 request.completed / request.failed / request.rejected. Prints the reply.
@@ -1009,7 +1013,7 @@ Options:
 Exit code is 1 when the reply is request.failed/rejected (the reply JSON is
 still printed on stdout).`;
 
-const SAY_HELP = `Usage: niq-agent say <text> --target <worker-id> [options]
+const SAY_HELP = `Usage: niq-interface say <text> --target <worker-id> [options]
 
 Send a worker.input event with {text, input_mode} to one worker — the short
 form for waking a reason-family worker. If the caller does not know the target
@@ -1024,9 +1028,9 @@ Options:
   plus the dial options.
 
 Example:
-  niq-agent say "summarise today's notes" --target reason.0 --source home`;
+  niq-interface say "summarise today's notes" --target reason.0 --source home`;
 
-const LISTEN_HELP = `Usage: niq-agent listen [options]
+const LISTEN_HELP = `Usage: niq-interface listen [options]
 
 Stream events routed to this identity, one JSON object per line on stdout.
 The first line on stderr announces that the stream is ready.
@@ -1042,19 +1046,19 @@ A bus keeps one live session per identity: a concurrent send/request using the
 same source replaces the listener. Use a distinct --source for long-lived
 listening.`;
 
-const PING_HELP = `Usage: niq-agent ping [options]
+const PING_HELP = `Usage: niq-interface ping [options]
 
 Open the SSE stream once, close it, and report the handshake latency. Exercises
 the credential and reachability without publishing anything.
 Options: the dial options.`;
 
-const INFO_HELP = `Usage: niq-agent info [options]
+const INFO_HELP = `Usage: niq-interface info [options]
 
 Show the connection the other commands would use (offline; no dial). The
 credential is redacted unless --show-credential is passed.
 Options: the dial options, --show-credential.`;
 
-const CONFIG_HELP = `Usage: niq-agent config <subcommand> [options]
+const CONFIG_HELP = `Usage: niq-interface config <subcommand> [options]
 
 Manage credential sources in the credential file.
 
@@ -1065,7 +1069,7 @@ Subcommands:
   add <name>              Add a source from flags:
                           --bus-url <url> --worker-id <id> --credential <cred> [--type <t>]
   import [name]           Add a source from the WebUI's KEY=value block, or
-                          merge a full agent-interface JSON config (name omitted)
+                          merge a full interface-worker JSON config (name omitted)
   remove <name>           Delete a source
   default <name>          Set the default source
 
@@ -1073,11 +1077,11 @@ Common options: --config <path>, --force (overwrite an existing source),
 --default (also make it the default), --show-credential (show only).
 
 Example:
-  niq-agent config import laptop        # paste, then Ctrl-D
-  niq-agent config import --from-file ~/Downloads/niq-agent-11.json
-  niq-agent ping --source laptop`;
+  niq-interface config import laptop        # paste, then Ctrl-D
+  niq-interface config import --from-file ~/Downloads/niq-interface-11.json
+  niq-interface ping --source laptop`;
 
-const SKILL_HELP = `Usage: niq-agent skill [path|print|install] [options]
+const SKILL_HELP = `Usage: niq-interface skill [path|print|install] [options]
 
 The companion agent skill ships inside the package. Without a subcommand,
 'path' is used.
@@ -1085,5 +1089,5 @@ The companion agent skill ships inside the package. Without a subcommand,
 Subcommands:
   path                    Print the skill directory and SKILL.md path
   print                   Print SKILL.md to stdout
-  install                 Copy the skill into ~/.agents/skills/niq-agent-interface
+  install                 Copy the skill into ~/.agents/skills/niq-interface
                           (--dest <dir> changes the root, --force overwrites)`;

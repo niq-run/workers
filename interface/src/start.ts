@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Shipped as the binary `niq-agent` (@niq.run/agent-interface-worker).
+ * Shipped as the binary `niq-interface` (@niq.run/interface-worker).
  *
- *   niq-agent <command> [options]
+ *   niq-interface <command> [options]
  *
  * The process is a thin shell around {@link runCli}: it supplies the real
  * stdout/stderr/stdin and the environment, and turns the returned code into the

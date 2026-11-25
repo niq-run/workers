@@ -1,23 +1,24 @@
 #!/usr/bin/env node
 /**
- * Shipped as the binary `niq-hello` (@niq.run/hello-worker). Entry point for
- * running the hello worker as its own process (the "worker as an app" model):
+ * Shipped as the binary `niq-hello` (@niq.run/hello-worker). This is the
+ * "worker as an app" entrypoint:
  *
  *   node dist/start.js [--key value ...]
  *
- * Connection params come from explicit flags or the supervisor-injected env
- * (NIQ_BUS_URL / NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL), merged by the SDK
- * helper `busConnFromArgs`.
+ * It is deliberately thin: parse flags, build the worker, run it. Parsing,
+ * connection layering and failure handling come from the SDK so every worker's
+ * launcher looks the same:
  *
- * Flags:
- *   --bus-url <url>        bus base URL (else NIQ_BUS_URL)
- *   --worker-id <id>       bus identity (else NIQ_WORKER_ID)
- *   --credential <cred>    bus credential (else NIQ_WORKER_CREDENTIAL)
- *   --greet-event-type <t> event type to answer (default: hello.greet)
- *   --default-name <n>     name used when the request carries none (default: world)
+ *   parseCliArgs     map `--key value` / `--key` into an object, flag `--help`
+ *   busConnFromArgs  layer --bus-url / --worker-id / --credential over the
+ *                    supervisor-injected env (NIQ_BUS_URL / NIQ_WORKER_ID /
+ *                    NIQ_WORKER_CREDENTIAL)
+ *   runWorkerApp     run the body; on failure log and set exit code 1
+ *
+ * Config precedence in this worker is flags > env > default; see worker.ts.
  */
 import { busConnFromArgs, parseCliArgs, runWorkerApp } from "@niq.run/worker-sdk";
-import { HelloWorker } from "./worker.js";
+import { DEFAULT_NAME_ENV, HelloWorker } from "./worker.js";
 
 function usage(): void {
   console.error(
@@ -25,8 +26,8 @@ function usage(): void {
       "  --bus-url <url>        bus base URL (else NIQ_BUS_URL)\n" +
       "  --worker-id <id>       bus identity (else NIQ_WORKER_ID)\n" +
       "  --credential <cred>    bus credential (else NIQ_WORKER_CREDENTIAL)\n" +
-      "  --greet-event-type <t> event type to answer (default: hello.greet)\n" +
-      "  --default-name <n>     name used when the request carries none (default: world)",
+      `  --default-name <name>  name used when a request carries none (else ${DEFAULT_NAME_ENV}; default: world)\n` +
+      "  --help                 print this help",
   );
 }
 
@@ -39,11 +40,34 @@ if (help) {
 await runWorkerApp(async () => {
   const conn = busConnFromArgs(opts);
   const worker = new HelloWorker({
-    baseURL: conn.baseURL,
-    workerID: conn.workerID,
-    credential: conn.credential,
-    ...(opts["greet-event-type"] !== undefined ? { greetEventType: String(opts["greet-event-type"]) } : {}),
-    ...(opts["default-name"] !== undefined ? { defaultName: String(opts["default-name"]) } : {}),
+    ...conn,
+    ...(opts["default-name"] !== undefined
+      ? { defaultName: String(opts["default-name"]) }
+      : {}),
   });
+
+  // Diagnostics go to stderr; stdout stays free for anything the worker might
+  // print for a caller. Log only non-secret facts.
+  console.error(
+    `[hello] ${worker.id} connecting to ${conn.baseURL} (serve hello.greet, hello.stats)`,
+  );
+
+  // Stop on Ctrl-C / SIGTERM instead of dying mid-handler. `close()` drains
+  // in-flight work before closing the stream.
+  let closing = false;
+  const shutdown = async (): Promise<void> => {
+    if (closing) return;
+    closing = true;
+    try {
+      await worker.close();
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
+
   await worker.run();
+  // The bus closed the stream (shutdown or restart): release the connection.
+  await worker.close().catch(() => {});
 });

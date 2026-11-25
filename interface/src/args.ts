@@ -56,7 +56,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         name = arg.slice(2);
       }
     } else if (arg.startsWith("-") && arg !== "-") {
-      throw usageError(`unknown flag: ${arg} (run 'niq-agent help')`);
+      throw usageError(`unknown flag: ${arg} (run 'niq-interface help')`);
     } else {
       positionals.push(arg);
       continue;
@@ -142,7 +142,7 @@ export function assertKnownFlags(
   const global = ["help", "version"];
   for (const name of Object.keys(flags)) {
     if (!allowed.includes(name) && !global.includes(name)) {
-      throw usageError(`unknown flag --${name} (run 'niq-agent help')`);
+      throw usageError(`unknown flag --${name} (run 'niq-interface help')`);
     }
   }
 }

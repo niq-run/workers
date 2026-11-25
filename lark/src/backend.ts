@@ -15,7 +15,9 @@ import {
   createEvent,
   EventType,
   type Event,
+  type IfaceBackend,
   type IfaceHandler,
+  type IfaceRunnable,
   type IfaceToolHost,
 } from "@niq.run/worker-sdk";
 import { Type } from "@sinclair/typebox";
@@ -98,7 +100,7 @@ const NS = "lark";
  * call. Inbound `approval.decision` events are ordinary interest, registered on
  * the handler in {@link setHandler}.
  */
-export class LarkBackend {
+export class LarkBackend implements IfaceBackend, IfaceRunnable {
   private readonly lark: LarkChannel;
   private readonly systemReminder: string;
   private readonly echo: boolean;

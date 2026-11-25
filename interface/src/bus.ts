@@ -312,7 +312,7 @@ function connectError(err: unknown, dial: BusDial): CliError {
       `authentication to ${dial.busURL} failed: ${raw}. ` +
         `The credential may be expired or revoked, or "${dial.workerID}" may not ` +
         `be a remote (dial-in) worker. Re-copy the connect block in the niq WebUI ` +
-        `and re-import it ('niq-agent config import <name> --force').`,
+        `and re-import it ('niq-interface config import <name> --force').`,
       { cause: err },
     );
   }

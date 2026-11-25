@@ -142,7 +142,7 @@ export function loadConfig(path: string, required: boolean): LoadedConfig {
       if (required) {
         throw new CliError(
           `credential file not found: ${path}. Create a source with ` +
-            `'niq-agent config import <name>' (paste the block the niq WebUI ` +
+            `'niq-interface config import <name>' (paste the block the niq WebUI ` +
             `shows for a remote worker), or pass --bus-url/--worker-id/--credential.`,
           { cause: err },
         );
@@ -320,7 +320,7 @@ export function defaultSourceName(config: ConfigFile): string {
   }
   throw new CliError(
     `no default source set and ${names.length} sources exist; name one (${names.join(", ")}) ` +
-      `or run 'niq-agent config default <name>'`,
+      `or run 'niq-interface config default <name>'`,
   );
 }
 
@@ -413,7 +413,7 @@ export type ParsedImport =
  * Parse either shape the WebUI hands out:
  *
  *   - the niw/supervisor `KEY=value` connect block (one source);
- *   - an agent-interface credential file, i.e. JSON with a `sources` map;
+ *   - an interface-worker credential file, i.e. JSON with a `sources` map;
  *   - a bare single-source JSON object (the same fields as one `sources` entry).
  *
  * JSON is detected by the first non-space character, so a block with a stray
@@ -493,7 +493,7 @@ export function resolveDial(
       throw new CliError(
         `source "${sourceName}" not found in ${configPath} ` +
           `(${namesOf(loaded.config) || "no sources yet"}). ` +
-          `Import one with 'niq-agent config import ${sourceName}'.`,
+          `Import one with 'niq-interface config import ${sourceName}'.`,
       );
     }
     base = { name: sourceName, source };
@@ -529,7 +529,7 @@ export function resolveDial(
         throw new CliError(
           `no default source and ${names.length} sources exist in ${configPath}; ` +
             `pass --source <name> (${names.join(", ")}) or run ` +
-            `'niq-agent config default <name>'.`,
+            `'niq-interface config default <name>'.`,
         );
       }
     }
@@ -549,7 +549,7 @@ export function resolveDial(
     throw new CliError(
       `no bus connection configured (missing ${missing.join(", ")}). ` +
         `Create a remote worker in the niq WebUI, then run ` +
-        `'niq-agent config import <name>' and paste its connect block; ` +
+        `'niq-interface config import <name>' and paste its connect block; ` +
         `or set ${BUS_ENV_VARS.busURL} / ${BUS_ENV_VARS.workerID} / ` +
         `${BUS_ENV_VARS.credential}.`,
     );

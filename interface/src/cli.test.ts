@@ -8,7 +8,7 @@ import { runCli, type CliContext } from "./cli.js";
 const temps: string[] = [];
 
 function tempConfigPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), "niq-agent-interface-"));
+  const dir = mkdtempSync(join(tmpdir(), "niq-interface-"));
   temps.push(dir);
   return join(dir, "interface.json");
 }
@@ -112,7 +112,7 @@ describe("discovery and usage", () => {
   it("prints help with no arguments", async () => {
     const h = harness();
     expect(await runCli([], h.ctx)).toBe(0);
-    expect(h.stdout()).toContain("niq-agent");
+    expect(h.stdout()).toContain("niq-interface");
     expect(h.stdout()).toContain("send <event-type>");
   });
 
@@ -120,7 +120,7 @@ describe("discovery and usage", () => {
     const h = harness();
     expect(await runCli(["--version"], h.ctx)).toBe(0);
     expect(h.stdout()).toMatch(
-      /^@niq\.run\/agent-interface-worker \d+\.\d+\.\d+/,
+      /^@niq\.run\/interface-worker \d+\.\d+\.\d+/,
     );
   });
 
@@ -442,7 +442,7 @@ describe("config", () => {
   });
 });
 
-describe("config import (agent-interface JSON)", () => {
+describe("config import (interface-worker JSON)", () => {
   const configJSON = JSON.stringify(
     {
       version: 1,
@@ -463,7 +463,7 @@ describe("config import (agent-interface JSON)", () => {
   function jsonFile(body = configJSON): string {
     const dir = mkdtempSync(join(tmpdir(), "niq-json-"));
     temps.push(dir);
-    const file = join(dir, "niq-agent-11.json");
+    const file = join(dir, "niq-interface-11.json");
     writeFileSync(file, body);
     return file;
   }
@@ -559,12 +559,12 @@ describe("skill", () => {
     const path = harness();
     expect(await runCli(["skill", "path"], path.ctx)).toBe(0);
     const info = path.json() as { dir: string; file: string; exists: boolean };
-    expect(info.file.endsWith("skills/niq-agent-interface/SKILL.md")).toBe(true);
+    expect(info.file.endsWith("skills/niq-interface/SKILL.md")).toBe(true);
     expect(info.exists).toBe(true);
 
     const printed = harness();
     expect(await runCli(["skill", "print"], printed.ctx)).toBe(0);
-    expect(printed.stdout()).toContain("name: niq-agent-interface");
+    expect(printed.stdout()).toContain("name: niq-interface");
   });
 
   it("installs into --dest and refuses to overwrite without --force", async () => {
@@ -577,7 +577,7 @@ describe("skill", () => {
     ).toBe(0);
     const installed = (first.json() as { installed: string }).installed;
     expect(readFileSync(join(installed, "SKILL.md"), "utf8")).toContain(
-      "name: niq-agent-interface",
+      "name: niq-interface",
     );
 
     const again = harness();

@@ -1,7 +1,7 @@
 {
   "name": "@niq.run/hello-worker",
-  "version": "0.1.0",
-  "description": "Minimal niq hello Worker — answers hello.greet requests with a greeting. Built on @niq.run/worker-sdk.",
+  "version": "0.2.0",
+  "description": "Reference niq worker — a complete, small example of the worker contract: state, text and object replies, a declared broadcast, worker.readme/worker.help, config layering, graceful shutdown and fake-bus tests. Built on @niq.run/worker-sdk.",
   "type": "module",
   "main": "./dist/worker.js",
   "types": "./dist/worker.d.ts",
@@ -9,8 +9,14 @@
     "niq-hello": "./dist/start.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niq-run/workers.git"
+  },
+  "homepage": "https://www.npmjs.com/package/@niq.run/hello-worker",
   "publishConfig": {
     "access": "public"
   },
@@ -19,16 +25,19 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
     "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
   },
   "dependencies": {
-    "@niq.run/worker-sdk": "*",
-    "@sinclair/typebox": "^0.34.52"
+    "@niq.run/worker-sdk": "^0.10.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "license": "MIT"
 }

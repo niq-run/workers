@@ -1,26 +1,31 @@
 ---
-name: niq-agent-interface
-description: Reach a niq event bus from the shell with the `niq-agent` CLI — send an event to a worker, invoke a capability and wait for its reply, or stream bus events. Use when an agent must talk to a niq instance (wake a reason worker with worker.input, call a worker tool, observe traffic) and a remote-worker credential is available.
+name: niq-interface
+description: Reach a niq event bus from the shell with the `niq-interface` CLI — send an event to a worker, invoke a capability and wait for its reply, or stream bus events. Use when an agent must talk to a niq instance (wake a reason worker with worker.input, call a worker tool, observe traffic) and a remote-worker credential is available.
 ---
 
-# niq-agent-interface
+# niq-interface
 
-`niq-agent` is the CLI form of the **agent interface worker**: the seam between
-a niq bus and an AI agent. The bus sees an ordinary remote-worker identity;
-each invocation dials as that identity, does one thing, and exits.
+`niq-interface` is the CLI form of the **interface worker** — the generic,
+out-of-process counterpart of niq's built-in interface worker. The bus sees an
+ordinary remote-worker identity; each invocation dials as that identity, does one
+thing, and exits. Other forms (stdio MCP, TUI, minimal web UI) are planned behind
+the same binary; this skill covers the CLI form.
+
+> Renamed from `@niq.run/agent-interface-worker` in 0.3.0. The `niq-agent` bin is
+> a deprecated alias for one release; use `niq-interface`.
 
 ## End-to-end flow (user → agent)
 
 When a user gives you this skill (or the package README URL), the full handoff
 is:
 
-1. **Ensure the CLI exists** — `niq-agent --version`. If missing, install
+1. **Ensure the CLI exists** — `niq-interface --version`. If missing, install
    from the repository (see Prerequisites).
-2. **Ensure this skill is active** — `niq-agent skill install`, or read
-   `agent-interface/skills/niq-agent-interface/SKILL.md` directly from a checkout.
+2. **Ensure this skill is active** — `niq-interface skill install`, or read
+   `interface/skills/niq-interface/SKILL.md` directly from a checkout.
 3. **Ask the user for a credential** — they create a **remote (dial-in)**
    worker in the niq WebUI, then paste its `NIQ_*` env block or the
-   agent-interface JSON config.
+   interface-worker JSON config.
 4. **Store it without echoing it** — write the block to a private temp file and
    run `config import` (see below), then delete the temp file.
 5. **Verify** — `info --source <name>`, then `ping --source <name>`. Stop and
@@ -37,18 +42,18 @@ is:
 
 ## Prerequisites
 
-1. The CLI is on `PATH` (`niq-agent --version`). If not, install it from npm:
+1. The CLI is on `PATH` (`niq-interface --version`). If not, install it from npm:
 
    ```sh
-   npm install -g @niq.run/agent-interface-worker
+   npm install -g @niq.run/interface-worker
    ```
 
    Or from the repository:
 
    ```sh
    # from the repository root
-   npm ci -w agent-interface
-   npm install -g ./agent-interface --install-links
+   npm ci -w interface
+   npm install -g ./interface --install-links
    ```
 
    Without a global install, the workspace install links the CLI into
@@ -58,10 +63,10 @@ is:
    export PATH="$PWD/node_modules/.bin:$PATH"
    ```
 
-   (or run `node agent-interface/dist/start.js` in place of `niq-agent`).
+   (or run `node interface/dist/start.js` in place of `niq-interface`).
 2. A reachable niq bus and a **remote (dial-in) worker identity**. In the niq
    WebUI create a worker with remote placement; it shows the connect info as a
-   `NIQ_*` env block and as an agent-interface JSON config (both copyable, the
+   `NIQ_*` env block and as an interface-worker JSON config (both copyable, the
    JSON also downloadable).
 
    Remote workers default to publish `*` / subscribe `*`. If the ACL was
@@ -83,7 +88,7 @@ The WebUI can give you the connect info in two shapes:
   # type=test
   ```
 
-- the **agent-interface JSON config** (copy or download), which is a complete
+- the **interface-worker JSON config** (copy or download), which is a complete
   credential file:
 
   ```json
@@ -118,16 +123,16 @@ retype the credential into a repository file or print it back.
    NIQ_WORKER_CREDENTIAL=niq1.eyJ...
    # type=test
    EOF
-   niq-agent config import 11 --from-file /tmp/niq-connect-block
+   niq-interface config import 11 --from-file /tmp/niq-connect-block
    rm -f /tmp/niq-connect-block
    ```
 
-   Piping stdin also works: `niq-agent config import 11 < /tmp/niq-connect-block`.
+   Piping stdin also works: `niq-interface config import 11 < /tmp/niq-connect-block`.
 3. Verify. `info` is offline; `ping` actually dials:
 
    ```sh
-   niq-agent info --source 11       # bus_url / worker_id / credential_configured
-   niq-agent ping --source 11       # exit 0 = the credential works
+   niq-interface info --source 11       # bus_url / worker_id / credential_configured
+   niq-interface ping --source 11       # exit 0 = the credential works
    ```
 
 4. If the source already exists: same identity with a re-issued credential →
@@ -135,12 +140,12 @@ retype the credential into a repository file or print it back.
 
 A malformed block fails loudly, naming the missing variable.
 
-### From an agent-interface JSON file
+### From an interface-worker JSON file
 
 A full config file carries its own source names, so omit the name:
 
 ```sh
-niq-agent config import --from-file ~/Downloads/niq-agent-11.json
+niq-interface config import --from-file ~/Downloads/niq-interface-11.json
 ```
 
 This **merges**: other sources survive, replacing an existing source needs
@@ -151,18 +156,18 @@ or you pass `--default`. If the JSON is only a single source object (no
 ### Use it
 
 ```sh
-niq-agent ping --source 11
-niq-agent say "hello" --target reason.0 --source 11
-niq-agent config default 11      # optional: make it the implicit source
+niq-interface ping --source 11
+niq-interface say "hello" --target reason.0 --source 11
+niq-interface config default 11      # optional: make it the implicit source
 ```
 
 One file holds many sources, so several buses/identities can coexist:
 
 ```sh
-niq-agent config list
-niq-agent config show 11
-niq-agent config default 11
-niq-agent config remove 11
+niq-interface config list
+niq-interface config show 11
+niq-interface config default 11
+niq-interface config remove 11
 ```
 
 - File: `~/.niq/interface.json` by default; `--config <path>` or
@@ -186,7 +191,7 @@ stderr. Exit codes: `0` ok, `1` failure, `2` usage error.
 | `listen [--type <pattern>]… [--from <id>]… [--max n] [--timeout <dur>]` | Stream events routed to this identity, one JSON object per line. |
 | `ping` | Open the SSE stream once and close it; reports handshake latency. |
 | `info` | Show the resolved connection offline (credential redacted). |
-| `config <sub>` | `path`, `list`, `show`, `add`, `import`, `remove`, `default`. `import` takes the WebUI env block (named) or agent-interface JSON (merged). |
+| `config <sub>` | `path`, `list`, `show`, `add`, `import`, `remove`, `default`. `import` takes the WebUI env block (named) or interface-worker JSON (merged). |
 | `skill <sub>` | `path`, `print`, `install [--dest <dir>]` — the companion skill. |
 
 Payload input: `-d '<json-object>'`, `-d -` (stdin), or `--data-file <path>`.
@@ -198,20 +203,20 @@ Payload input: `-d '<json-object>'`, `-d -` (stdin), or `--data-file <path>`.
 Wake a reason worker:
 
 ```sh
-niq-agent say "Summarise today's notes" --target reason.0 --source home
+niq-interface say "Summarise today's notes" --target reason.0 --source home
 ```
 
 Call a capability and read the reply:
 
 ```sh
-niq-agent request hello.greet --target hello@bus -d '{"name":"niq"}'
+niq-interface request hello.greet --target hello@bus -d '{"name":"niq"}'
 # { "ok": true, "request_id": "…", "reply": { "type": "request.completed", "payload": { "result": "hello, niq!" } } }
 ```
 
 Observe traffic for a bounded window:
 
 ```sh
-niq-agent listen --type 'reason.*' --type 'worker.*' --max 20 --timeout 30s --source watch
+niq-interface listen --type 'reason.*' --type 'worker.*' --max 20 --timeout 30s --source watch
 ```
 
 The listener writes a readiness line to **stderr** after the stream is
@@ -221,7 +226,7 @@ publishing.
 Notify a worker directly:
 
 ```sh
-niq-agent send ops.notice --target niq -d '{"text":"deploy done"}'
+niq-interface send ops.notice --target niq -d '{"text":"deploy done"}'
 ```
 
 ## Rules and pitfalls
@@ -245,11 +250,16 @@ niq-agent send ops.notice --target niq -d '{"text":"deploy done"}'
   identity is not remote-connectable: re-copy the block and re-import it with
   `config import <name> --force`.
 - Event streams are NDJSON: parse line by line, and do not expect a JSON array.
+- **One-shot commands do not wait.** `send`, `say` and `request` push the event
+  (for `request`, also read the one correlated reply), print the JSON result and
+  exit — the session closes with the process. There is no follow-up output and
+  nothing to keep open or poll: once stdout has the result, the work is done.
+  `listen` is the only command that stays connected.
 
 ## Give another agent this skill
 
 ```sh
-niq-agent skill install            # copies to ~/.agents/skills/niq-agent-interface
-niq-agent skill print              # print SKILL.md to stdout
-niq-agent skill path               # where it lives in the installed package
+niq-interface skill install            # copies to ~/.agents/skills/niq-interface
+niq-interface skill print              # print SKILL.md to stdout
+niq-interface skill path               # where it lives in the installed package
 ```

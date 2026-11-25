@@ -1,11 +1,12 @@
 {
-  "name": "@niq.run/agent-interface-worker",
-  "version": "0.2.0",
-  "description": "Agent interface worker for niq (CLI form) — dial a niq event bus from the shell, send directed events, request a capability reply, or stream bus events. Credentials come from a local multi-source file matching the WebUI's remote-worker connect block.",
+  "name": "@niq.run/interface-worker",
+  "version": "0.3.0",
+  "description": "The generic out-of-process interface worker for niq — exposes the bus to a local harness (CLI form today: send directed events, request a capability reply, stream bus events) with pluggable outward forms. Credentials come from a local multi-source file matching the WebUI's remote-worker connect block.",
   "type": "module",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "bin": {
+    "niq-interface": "./dist/start.js",
     "niq-agent": "./dist/start.js"
   },
   "files": [
@@ -17,7 +18,7 @@
     "type": "git",
     "url": "git+https://github.com/niq-run/workers.git"
   },
-  "homepage": "https://www.npmjs.com/package/@niq.run/agent-interface-worker",
+  "homepage": "https://www.npmjs.com/package/@niq.run/interface-worker",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"

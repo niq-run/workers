@@ -21,13 +21,12 @@ Flat, one directory per worker:
 
 ```
 workers/
-├── package.json     # npm workspace root — an entry exists for each worker below
+├── package.json       # npm workspace root — an entry exists for each worker below
 ├── tsconfig.base.json
-├── hello/           # @niq.run/hello-worker     — minimal demo (bin: niq-hello)
-├── agent-interface/ # @niq.run/agent-interface-worker — agent interface, CLI form (bin: niq-agent)
-├── lark/            # @niq.run/lark-worker      — Feishu WebSocket bridge (bin: niq-lark)
-├── msp/             # @niq.run/msp-worker       — MSP world bridge (bin: niq-msp)
-└── tavily/          # @niq.run/tavily-worker    — web search (bin: niq-tavily)
+├── hello/             # @niq.run/hello-worker     — reference example (bin: niq-hello)
+├── interface/         # @niq.run/interface-worker — generic interface worker, CLI form (bin: niq-interface)
+├── lark/              # @niq.run/lark-worker      — Feishu WebSocket bridge (bin: niq-lark)
+└── msp/               # @niq.run/msp-worker       — MSP world bridge (bin: niq-msp)
 ```
 
 - Each worker is an independent npm package with its own `bin`, e.g.
@@ -45,14 +44,17 @@ workers/
 ```sh
 npm install -g @niq.run/hello-worker
 npm install -g @niq.run/lark-worker
-npm install -g @niq.run/tavily-worker
 ```
 
-Install the agent interface worker from npm:
+Install the interface worker from npm:
 
 ```sh
-npm install -g @niq.run/agent-interface-worker
+npm install -g @niq.run/interface-worker
 ```
+
+> The rename from `@niq.run/agent-interface-worker` lives in this repo but is not
+> published yet. Until `@niq.run/interface-worker` is on npm, install from this
+> checkout, or use the old package name (identical CLI, bin `niq-agent`).
 
 `@niq.run/msp-worker` is not on npm yet (its MSP SDK is vendored): install it
 from this checkout.
@@ -65,8 +67,8 @@ npm install -g ./msp --install-links
 Or build any worker from this checkout:
 
 ```sh
-npm ci -w agent-interface
-npm install -g ./agent-interface --install-links
+npm ci -w interface
+npm install -g ./interface --install-links
 ```
 
 Then run each worker's own launcher, or import it in code:
@@ -79,33 +81,32 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 
 | Package | Launcher | Description |
 |---|---|---|
-| `@niq.run/hello-worker` | `niq-hello` | Minimal demo worker: answers `hello.greet` requests with a `request.completed` greeting |
-| `@niq.run/agent-interface-worker` | `niq-agent` | Agent interface worker (CLI form): dials a niq bus from the shell (multi-source credential file matching the WebUI's remote-worker connect block), sends directed events, requests a reply, streams events. Ships a companion agent skill (`niq-agent skill install`) |
+| `@niq.run/hello-worker` | `niq-hello` | **Reference example — start here to build a worker.** A complete, small worker that demonstrates every part of the contract: state, two tool-shaped extensions (text reply + object reply), a declared broadcast, `worker.readme` / `worker.help`, flag > env > default config, graceful shutdown, and fake-bus tests |
+| `@niq.run/interface-worker` | `niq-interface` | Generic out-of-process interface worker (CLI form today): dials a niq bus from the shell (multi-source credential file matching the WebUI's remote-worker connect block), sends directed events, requests a reply, streams events. The remote counterpart of the built-in interface worker; ships a companion agent skill (`niq-interface skill install`) |
 | `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
 | `@niq.run/msp-worker` | `niq-msp` | MSP world bridge: joins an MSP world through the vendored MSP TypeScript SDK, serves `msp.nodes` / `msp.call` / `msp.publish` / `msp.manifest` to niq, exposes `niq_call` / `niq_send` to MSP peers, and forwards inbound MSP signals as niq events |
-| `@niq.run/tavily-worker` | `niq-tavily` | Web-search bridge: answers `tavily.search` requests with the Tavily answer + top sources |
 
-## Agent bootstrap: agent-interface from a repo URL
+## Agent bootstrap: interface worker from a repo URL
 
-Given only this repository's URL, an agent can install the agent-interface CLI
+Given only this repository's URL, an agent can install the interface worker CLI
 and its skill, then dial a niq bus:
 
 ```sh
 git clone https://github.com/niq-run/workers.git
 cd workers
-npm ci -w agent-interface
-npm install -g ./agent-interface --install-links
-niq-agent skill install
+npm ci -w interface
+npm install -g ./interface --install-links
+niq-interface skill install
 
 # with the connect block copied from the niq WebUI for a remote worker:
-niq-agent config import 11 --from-file ./block.txt
-niq-agent ping --source 11
-niq-agent say "hello" --target reason.0 --source 11
+niq-interface config import 11 --from-file ./block.txt
+niq-interface ping --source 11
+niq-interface say "hello" --target reason.0 --source 11
 ```
 
 The skill is also readable without installing:
-[`agent-interface/skills/niq-agent-interface/SKILL.md`](agent-interface/skills/niq-agent-interface/SKILL.md).
-Full details: [`agent-interface/README.md`](agent-interface/README.md).
+[`interface/skills/niq-interface/SKILL.md`](interface/skills/niq-interface/SKILL.md).
+Full details: [`interface/README.md`](interface/README.md).
 
 Sends are directed only and there is no implicit target: if the id is unknown,
 the agent must ask the user. In many projects the main reason worker is named
@@ -113,17 +114,33 @@ the agent must ask the user. In many projects the main reason worker is named
 
 ## Add a worker
 
-1. Create the worker as its own package under this repo: `src/worker.ts` (the worker
-   class + config helpers, importable in-process or by tests) plus `src/start.ts`
-   (the `#!/usr/bin/env node` entrypoint compiled to `dist/start.js`, which is what
-   the package `bin` points at — this is what makes the worker usable as a standalone
-   app run with one command). A CLI-shaped worker (`agent-interface`) keeps its command
-   surface in `src/cli.ts` and uses `start.ts` only as the thin process wrapper.
-   Add a `package.json` with the `bin` field, and a
-   `tsconfig.json` extending `../tsconfig.base.json`.
-2. Register it in the `workspaces` array of the root `package.json`.
-3. Add tests, then run `npm test`, `npm run typecheck`, and `npm run build` from
-   the repo root.
+`hello/` is the canonical example: copy it, rename the package, and replace the
+capabilities. Its guide — [`hello/README.md`](hello/README.md) — walks through the
+file layout, the lifecycle contract, the extension registry, replies, presence,
+config layering, tests and packaging, and ends with a copy-and-rename checklist.
+
+In short, a worker is a small package:
+
+1. `src/worker.ts` — the worker class: connection options, state, extensions
+   (`register` with a schema), handlers, `run()` / `close()`. Importable in
+   process and by tests.
+2. `src/start.ts` — the `#!/usr/bin/env node` entrypoint compiled to
+   `dist/start.js`; the package `bin` points here, so the worker runs as a
+   standalone app with one command. It reuses the SDK's `parseCliArgs`,
+   `busConnFromArgs` and `runWorkerApp` instead of re-implementing bootstrap.
+3. `src/worker.test.ts` — protocol-level tests against a fake bus (no live bus).
+4. `package.json` with `bin`, plus a `tsconfig.json` extending
+   `../tsconfig.base.json`.
+
+Then register the package in the root `workspaces` array and run `npm test`,
+`npm run typecheck` and `npm run build` from the repo root.
+
+If the worker's job is to be a **seam to an outside world** (a chat platform, a
+protocol, a local harness) rather than a domain of its own, build it the way
+`lark`, `msp` and `interface` are built: the SDK's `InterfaceWorker` for the niq
+side plus a *backend* class for the outward side. `hello` is deliberately a plain
+`BaseWorker` so it shows the raw contract; the interface workers show the same
+contract with that extra split.
 
 ## Development
 

@@ -5,10 +5,9 @@
   "description": "niq extension workers — each worker is an independent package under this repo.",
   "workspaces": [
     "hello",
-    "agent-interface",
+    "interface",
     "lark",
-    "msp",
-    "tavily"
+    "msp"
   ],
   "scripts": {
     "build": "npm run build --workspaces",

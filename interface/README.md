@@ -1,54 +1,68 @@
-# @niq.run/agent-interface-worker
+# @niq.run/interface-worker
 
-An **agent interface worker** for niq: the seam between a
-[niq](https://github.com/niq-run/niq) event bus and an AI agent. The bus sees an
-ordinary remote-worker identity; the current form is a CLI, and the process
-shape is an implementation detail — the audience is what names it.
+The **generic, out-of-process interface worker** for niq: the remote counterpart
+of niq's built-in interface worker. It takes the SDK's interface seam — identity,
+ACL, presence, tool dispatch, request/reply — and exposes it to a local harness,
+so anything that can run a command can talk to a bus without writing SDK code.
 
-Use it from a shell to send directed events, call a capability and wait for its
-reply, or stream traffic — without writing SDK code.
+"Interface" says which side it faces: the bus, from the outside. The **form** is
+the outward shape, and it is a separate axis:
+
+| Form | Lifetime | Command | Status |
+|---|---|---|---|
+| CLI (one-shot) | dial → do one thing → exit | `niq-interface <command>` | shipped |
+| stdio MCP server | long-lived, one per MCP client | `niq-interface mcp` | planned |
+| terminal UI | long-lived | `niq-interface tui` | planned |
+| minimal web UI | long-lived | `niq-interface serve` | planned |
+
+The one-shot CLI uses the SDK's stateless `InterfaceSession`; long-lived forms
+use the stateful `InterfaceWorker` and keep presence, backends and tools. This is
+the same split the repo's `lark` and `msp` workers use — they are interface
+workers with a fixed backend, while this package's backend is "whatever process
+is driving it", which is why several forms can live here.
+
+Use the CLI from a shell to send directed events, call a capability and wait for
+its reply, or stream traffic.
 
 Every invocation is short-lived: it opens the bus's SSE session as one remote
 worker identity, does one thing, and exits. Credentials live in a local
 multi-source file whose format is exactly the block the niq WebUI shows after
 creating a **remote** worker.
 
-The bus operations are built on the SDK's `InterfaceSession` — the stateless
-half of the TypeScript interface worker. Stateful forms (a bridge, a daemon)
-use `InterfaceWorker` and keep presence, backends and tools; this CLI does not.
+> Renamed from `@niq.run/agent-interface-worker` in 0.3.0. `niq-agent` remains
+> as a deprecated alias bin for one release; use `niq-interface`.
 
 ## Quick start (from this repository)
 
 An agent given the repository URL (`https://github.com/niq-run/workers`) can
-install from a checkout and run this end to end. The package is also published
-as `@niq.run/agent-interface-worker`, so
-`npm install -g @niq.run/agent-interface-worker` is the shorter path (see
-[Install](#install)).
+install from a checkout and run this end to end. The package will be published as
+`@niq.run/interface-worker`; until that rename is published, only the old
+`@niq.run/agent-interface-worker` is on npm (see [Install](#install)).
 
 ```sh
 # 1. install the CLI (Node 18+)
 git clone https://github.com/niq-run/workers.git
 cd workers
-npm ci -w agent-interface                  # deps + `prepare` builds agent-interface/dist
-npm install -g ./agent-interface --install-links
-niq-agent --version
+npm ci -w interface                  # deps + `prepare` builds interface/dist
+npm install -g ./interface --install-links
+niq-interface --version
 
 # 2. install the companion skill for the agent harness
-niq-agent skill install              # -> ~/.agents/skills/niq-agent-interface
+niq-interface skill install              # -> ~/.agents/skills/niq-interface
 
 # 3. connect with the block the niq WebUI shows for a remote worker
 #    (save the copied block as block.txt, or drop --from-file and paste it)
-niq-agent config import 11 --from-file ./block.txt
-niq-agent ping --source 11
+niq-interface config import 11 --from-file ./block.txt
+niq-interface ping --source 11
 
 # 4. use it
-niq-agent say "summarise today's notes" --target reason.0 --source 11
-niq-agent listen --type 'reason.*' --max 10 --timeout 30s --source 11
+niq-interface say "summarise today's notes" --target reason.0 --source 11
+niq-interface listen --type 'reason.*' --max 10 --timeout 30s --source 11
 ```
 
 An agent that only has the repository can read the skill before installing
-anything: [`skills/niq-agent-interface/SKILL.md`](skills/niq-agent-interface/SKILL.md)
-(or `niq-agent skill print` after installing).
+anything: [`skills/niq-interface/SKILL.md`](skills/niq-interface/SKILL.md)
+(or `niq-interface skill print` after installing).
 
 If the global npm prefix is not writable, skip the `npm install -g` line and
 add the workspace bin to PATH instead (the workspace install links it there):
@@ -58,23 +72,23 @@ add the workspace bin to PATH instead (the workspace install links it there):
 
 When a user gives an agent this README's URL, the handoff is:
 
-1. **Agent installs the CLI** — clone, `npm ci -w agent-interface`,
-   `npm install -g ./agent-interface --install-links` (see [Install](#install)).
-2. **Agent installs the skill** — `niq-agent skill install`, or reads
-   `skills/niq-agent-interface/SKILL.md` directly.
+1. **Agent installs the CLI** — clone, `npm ci -w interface`,
+   `npm install -g ./interface --install-links` (see [Install](#install)).
+2. **Agent installs the skill** — `niq-interface skill install`, or reads
+   `skills/niq-interface/SKILL.md` directly.
 3. **User issues a credential** — in the niq WebUI create a **remote
    (dial-in)** worker, choose its id, then copy the `NIQ_*` env block (or the
-   agent-interface JSON) and hand it to the agent.
-4. **Agent stores it** — `niq-agent config import <id> --from-file <file>`
+   interface-worker JSON) and hand it to the agent.
+4. **Agent stores it** — `niq-interface config import <id> --from-file <file>`
    (a full JSON config omits `<id>`); never echo the credential back.
-5. **Agent verifies** — `niq-agent info --source <id>`, then
-   `niq-agent ping --source <id>`. `401` means re-issue the credential;
+5. **Agent verifies** — `niq-interface info --source <id>`, then
+   `niq-interface ping --source <id>`. `401` means re-issue the credential;
    `403` means an ACL/publish-permission problem.
 6. **Agent resolves the target** — sends are directed only; there is no
    implicit target. Ask the user. In many projects the main reason worker is
    named `niq`, a common candidate — confirm it (or a different id) explicitly.
    If unsure, list live ids with
-   `niq-agent listen --type worker.ready --max 20 --timeout 10s --source <id>`.
+   `niq-interface listen --type worker.ready --max 20 --timeout 10s --source <id>`.
 7. **Agent works** — `say` / `send --target` / `request --target` / `listen`,
    then reports the result (or the failure) to the user.
 8. **Cleanup** — remove any temp block file; the credential file stays at
@@ -87,32 +101,36 @@ Node **18+** (uses global `fetch`, `ReadableStream`, `AbortSignal`).
 ### From npm
 
 ```sh
-npm install -g @niq.run/agent-interface-worker   # gives the `niq-agent` command
-npx -y @niq.run/agent-interface-worker --help    # or run without installing
+npm install -g @niq.run/interface-worker   # gives the `niq-interface` command
+npx -y @niq.run/interface-worker --help    # or run without installing
 ```
+
+> Not published under the new name yet. Until it is, use
+> `npm install -g @niq.run/agent-interface-worker` (identical CLI, bin
+> `niq-agent`), or install from this repository below.
 
 ### From this repository
 
 ```sh
 git clone https://github.com/niq-run/workers.git
 cd workers
-npm ci -w agent-interface
-npm install -g ./agent-interface --install-links
+npm ci -w interface
+npm install -g ./interface --install-links
 ```
 
-- `npm ci -w agent-interface` installs only this workspace's dependencies and runs
+- `npm ci -w interface` installs only this workspace's dependencies and runs
   the package's `prepare`, which builds `dist/`. Do not skip it: a bare clone has
   no `tsc`, so `--install-links` would fail in `prepare` with
   `tsc: command not found`.
 - In an existing checkout where dependencies are already installed, use
-  `npm install -w agent-interface` instead of `npm ci` (which resets
+  `npm install -w interface` instead of `npm ci` (which resets
   `node_modules`).
 - `--install-links` packs the package and installs its
   `@niq.run/worker-sdk` dependency, instead of symlinking the source tree.
 - No permission for the global npm prefix? Install into a user prefix:
 
   ```sh
-  npm install -g ./agent-interface --install-links --prefix "$HOME/.local"
+  npm install -g ./interface --install-links --prefix "$HOME/.local"
   export PATH="$HOME/.local/bin:$PATH"
   ```
 
@@ -121,25 +139,29 @@ npm install -g ./agent-interface --install-links
 
   ```sh
   export PATH="$PWD/node_modules/.bin:$PATH"
-  niq-agent --version
+  niq-interface --version
   ```
 
-  The skill's examples then work unchanged (they assume `niq-agent` on
-  PATH). The alternative is `node agent-interface/dist/start.js ...`.
+  The skill's examples then work unchanged (they assume `niq-interface` on
+  PATH). The alternative is `node interface/dist/start.js ...`.
 
 ### Install the skill
 
 ```sh
-niq-agent skill install                          # ~/.agents/skills/niq-agent-interface
-niq-agent skill install --dest .agents/skills    # project-local
-niq-agent skill install --force                  # overwrite an older copy
-niq-agent skill print                            # print SKILL.md to stdout
+niq-interface skill install                          # ~/.agents/skills/niq-interface
+niq-interface skill install --dest .agents/skills    # project-local
+niq-interface skill install --force                  # overwrite an older copy
+niq-interface skill print                            # print SKILL.md to stdout
 ```
 
 `npm install` does **not** install the skill: agent harnesses use different
 skill directories, and install scripts are frequently disabled. The copy is
 explicit so you choose the destination; to uninstall, remove
-`<dest>/niq-agent-interface`.
+`<dest>/niq-interface`.
+
+> Renamed skill. Earlier versions installed `niq-agent-interface`. Remove the old
+> directory when you install this one:
+> `rm -rf ~/.agents/skills/niq-agent-interface`.
 
 ## How it connects
 
@@ -156,19 +178,19 @@ NIQ_WORKER_CREDENTIAL=eyJ...
 Import it verbatim:
 
 ```sh
-niq-agent config import home          # stdin
-niq-agent config import home --from-file ./block.txt
+niq-interface config import home          # stdin
+niq-interface config import home --from-file ./block.txt
 ```
 
 The WebUI can hand this out in two shapes: the `NIQ_*` **env block** above (for
-niw / supervisor-launched workers) and a ready-to-use **agent-interface JSON
+niw / supervisor-launched workers) and a ready-to-use **interface-worker JSON
 config** (copy or download). `config import` accepts both — an env block adds
 one source under the name you pass; a full JSON file merges all of its sources
 and takes no name:
 
 ```sh
-niq-agent config import home --from-file block.env
-niq-agent config import --from-file ~/Downloads/niq-agent-11.json
+niq-interface config import home --from-file block.env
+niq-interface config import --from-file ~/Downloads/niq-interface-11.json
 ```
 
 A full-file import merges (it never deletes other sources), refuses to replace
@@ -241,7 +263,7 @@ to stderr. Exit codes: `0` ok, `1` failure, `2` usage error.
 | `listen [--type <pattern>]… [--from <id>]… [--max <n>] [--timeout <dur>]` | Stream events routed to this identity as NDJSON. |
 | `ping` | Open the SSE session once, close it, report the handshake latency. |
 | `info` | Show the resolved connection offline (credential redacted). |
-| `config <sub>` | `path`, `list`, `show`, `add`, `import`, `remove`, `default`. `import` takes the WebUI's env block (named) or agent-interface JSON (merged). |
+| `config <sub>` | `path`, `list`, `show`, `add`, `import`, `remove`, `default`. `import` takes the WebUI's env block (named) or interface-worker JSON (merged). |
 | `skill <sub>` | `path`, `print`, `install [--dest <dir>]` — the companion agent skill. |
 | `help [command]` | Usage. |
 
@@ -265,26 +287,26 @@ Durations accept `500ms`, `30s`, `5m`, `1h`; a bare number means seconds.
 fails, and there is no implicit target. If the caller does not know the id, it
 must ask the user. In many niq projects the main reason worker is named `niq`,
 so that is a common candidate — not a default. `listen` can reveal live ids via
-`worker.ready` presence (`niq-agent listen --type worker.ready --max 20 --timeout 10s`).
+`worker.ready` presence (`niq-interface listen --type worker.ready --max 20 --timeout 10s`).
 
 ### Examples
 
 ```sh
 # Directed message into a reason worker
-niq-agent say "review the 2026-10 budget" --target reason.0
+niq-interface say "review the 2026-10 budget" --target reason.0
 
 # Call a capability and read its structured reply
-niq-agent request hello.greet --target hello@bus -d '{"name":"niq"}'
+niq-interface request hello.greet --target hello@bus -d '{"name":"niq"}'
 # → { "ok": true, "request_id": "…", "reply": { …, "payload": { "result": "hello, niq!" } } }
 
 # Directed notification
-niq-agent send ops.notice --target niq -d '{"text":"deploy done"}'
+niq-interface send ops.notice --target niq -d '{"text":"deploy done"}'
 
 # Watch a bounded window (readiness line on stderr, events on stdout)
-niq-agent listen --type 'reason.*' --type 'worker.*' --max 20 --timeout 30s
+niq-interface listen --type 'reason.*' --type 'worker.*' --max 20 --timeout 30s
 
 # Stream and pipe each event through jq
-niq-agent listen | jq -c 'select(.type == "worker.ready") | .payload'
+niq-interface listen | jq -c 'select(.type == "worker.ready") | .payload'
 ```
 
 `request` exits `1` when the reply is `request.failed`/`request.rejected`, but
@@ -295,10 +317,10 @@ timeout, or on Ctrl-C; it exits `1` if the bus closes the stream unexpectedly
 ## Companion skill
 
 The agent-facing guide lives at
-[`skills/niq-agent-interface/SKILL.md`](skills/niq-agent-interface/SKILL.md) and is
-shipped inside the package. `niq-agent skill install` copies it into a
+[`skills/niq-interface/SKILL.md`](skills/niq-interface/SKILL.md) and is
+shipped inside the package. `niq-interface skill install` copies it into a
 harness's skills directory (see [Install the skill](#install-the-skill));
-`niq-agent skill print` writes it to stdout.
+`niq-interface skill print` writes it to stdout.
 
 ## Security notes
 
@@ -325,6 +347,8 @@ The bus tests use a fake `fetch` (an SSE `Response` plus a recording
 
 ## Limits of this first version
 
+- Only the CLI form ships today. `mcp`, `tui` and `serve` are planned; they need
+  the stateful `InterfaceWorker` half that `lark` and `msp` already use.
 - Sends are directed only: there is no broadcast, and `send` requires a target.
 - One-shot commands only; there is no daemon/multiplexing, so concurrent
   long-lived listeners need distinct identities.
