@@ -1,6 +1,6 @@
 ---
 name: niq-interface
-description: Reach a niq event bus from the shell with the `niq-interface` CLI — send an event to a worker, invoke a capability and wait for its reply, or stream bus events. Use when an agent must talk to a niq instance (wake a reason worker with worker.input, call a worker tool, observe traffic) and a remote-worker credential is available.
+description: Reach a niq event bus from the shell with the `niq-interface` CLI, or as MCP tools via `niq-interface mcp` — send an event to a worker, invoke a capability and wait for its reply, stream or poll bus events. Use when an agent must talk to a niq instance (wake a reason worker with worker.input, call a worker tool, observe traffic) and a remote-worker credential is available.
 ---
 
 # niq-interface
@@ -228,6 +228,46 @@ Notify a worker directly:
 ```sh
 niq-interface send ops.notice --target niq -d '{"text":"deploy done"}'
 ```
+
+## MCP mode (tools instead of shell)
+
+If the harness supports MCP, prefer it over shelling out: the same capabilities
+arrive as tools, and with `--persistent` you can send and then poll.
+
+```json
+{
+  "mcpServers": {
+    "niq": {
+      "command": "niq-interface",
+      "args": ["mcp", "--persistent", "--source", "laptop"]
+    }
+  }
+}
+```
+
+| Tool | Notes |
+|---|---|
+| `niq_send {target, event, payload?}` | Directed, fire-and-forget |
+| `niq_request {target, event, payload?, timeout_ms?}` | Waits for the correlated reply |
+| `niq_say {target, text, mode?}` | `worker.input` to a reason worker |
+| `niq_status` | Connection + inbox counters |
+| `niq_inbox {cursor?, wait_ms?, types?, from?, limit?}` | Persistent mode only |
+
+Without `--persistent` each tool call dials and disconnects (the CLI model);
+there is no inbox.
+
+**Send-then-poll (a2a style), persistent mode:**
+
+1. `niq_send` → returns immediately.
+2. `niq_inbox {cursor: 0, wait_ms: 30000}` → blocks until something arrives;
+   returns `{events, next_cursor}`.
+3. Reuse `next_cursor` as `cursor` — no duplicates.
+
+Caveats: the persistent server **owns the identity**, so do not run CLI commands
+with the same `--source` (they would replace its connection); give the server its
+own source. The inbox is bounded (default 500), and `gap: true` means events were
+dropped before the oldest one still held. The server is a client: it does not
+announce `worker.ready`, so peers need its worker id to reach it.
 
 ## Rules and pitfalls
 

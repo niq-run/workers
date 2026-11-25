@@ -1,7 +1,7 @@
 {
   "name": "@niq.run/interface-worker",
-  "version": "0.3.0",
-  "description": "The generic out-of-process interface worker for niq — exposes the bus to a local harness (CLI form today: send directed events, request a capability reply, stream bus events) with pluggable outward forms. Credentials come from a local multi-source file matching the WebUI's remote-worker connect block.",
+  "version": "0.4.0",
+  "description": "The generic out-of-process interface worker for niq — exposes the bus to a local harness as a CLI and as MCP tools (one-shot per call, or persistent with an in-memory inbox for send-then-poll). Credentials come from a local multi-source file matching the WebUI's remote-worker connect block.",
   "type": "module",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",

@@ -24,7 +24,7 @@ workers/
 ├── package.json       # npm workspace root — an entry exists for each worker below
 ├── tsconfig.base.json
 ├── hello/             # @niq.run/hello-worker     — reference example (bin: niq-hello)
-├── interface/         # @niq.run/interface-worker — generic interface worker, CLI form (bin: niq-interface)
+├── interface/         # @niq.run/interface-worker — generic interface worker, CLI + MCP (bin: niq-interface)
 ├── lark/              # @niq.run/lark-worker      — Feishu WebSocket bridge (bin: niq-lark)
 └── msp/               # @niq.run/msp-worker       — MSP world bridge (bin: niq-msp)
 ```
@@ -82,7 +82,7 @@ import { LarkWorker, larkConfigFromEnv } from "@niq.run/lark-worker";
 | Package | Launcher | Description |
 |---|---|---|
 | `@niq.run/hello-worker` | `niq-hello` | **Reference example — start here to build a worker.** A complete, small worker that demonstrates every part of the contract: state, two tool-shaped extensions (text reply + object reply), a declared broadcast, `worker.readme` / `worker.help`, flag > env > default config, graceful shutdown, and fake-bus tests |
-| `@niq.run/interface-worker` | `niq-interface` | Generic out-of-process interface worker (CLI form today): dials a niq bus from the shell (multi-source credential file matching the WebUI's remote-worker connect block), sends directed events, requests a reply, streams events. The remote counterpart of the built-in interface worker; ships a companion agent skill (`niq-interface skill install`) |
+| `@niq.run/interface-worker` | `niq-interface` | Generic out-of-process interface worker: CLI and stdio MCP (one-shot, or persistent with an in-memory inbox for send-then-poll). Dials a niq bus from a multi-source credential file matching the WebUI's remote-worker connect block, sends directed events, requests a reply, streams events. The remote counterpart of the built-in interface worker; ships a companion agent skill (`niq-interface skill install`) |
 | `@niq.run/lark-worker` | `niq-lark` | Feishu long-connection bridge: connects to Lark over WebSocket and forwards inbound messages to a reason worker, selected per-chat via a persistent routing map (per-chat → default → fallback), pushing the reason reply (its `send_message` → `worker.input`) back to the Feishu chat |
 | `@niq.run/msp-worker` | `niq-msp` | MSP world bridge: joins an MSP world through the vendored MSP TypeScript SDK, serves `msp.nodes` / `msp.call` / `msp.publish` / `msp.manifest` to niq, exposes `niq_call` / `niq_send` to MSP peers, and forwards inbound MSP signals as niq events |
 

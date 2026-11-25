@@ -31,6 +31,25 @@ const io = {
     }
     return Buffer.concat(chunks).toString("utf8");
   },
+  /**
+   * Newline-delimited stdin, for `mcp`. Yields complete lines as they arrive
+   * (a stream, not a buffered read), so a JSON-RPC loop can answer while the
+   * client keeps sending.
+   */
+  async *stdinLines(): AsyncIterable<string> {
+    process.stdin.setEncoding("utf8");
+    let buffer = "";
+    for await (const chunk of process.stdin) {
+      buffer += typeof chunk === "string" ? chunk : String(chunk);
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        yield buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+      }
+    }
+    if (buffer.trim() !== "") yield buffer;
+  },
 };
 
 process.exitCode = await runCli(process.argv.slice(2), {

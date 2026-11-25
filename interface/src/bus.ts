@@ -122,7 +122,7 @@ export async function publish(
     );
   }
   const event = previewEvent(dial, req);
-  const session = await open(dial, ctx);
+  const session = await openSession(dial, ctx);
   try {
     await session.send(event, ...targets);
   } catch (err) {
@@ -153,7 +153,7 @@ export async function request(
   const requestID = newId();
   event.request_id = requestID;
 
-  const session = await open(dial, ctx);
+  const session = await openSession(dial, ctx);
   try {
     const reply = await session.request(req.target, event, {
       timeoutMs: req.timeoutMs,
@@ -182,7 +182,7 @@ export async function listen(
   opts: ListenOptions,
   ctx: BusContext = {},
 ): Promise<ListenOutcome> {
-  const session = await open(dial, ctx);
+  const session = await openSession(dial, ctx);
 
   let stopped = false;
   let timedOut = false;
@@ -248,12 +248,12 @@ export async function ping(
   ctx: BusContext = {},
 ): Promise<number> {
   const started = Date.now();
-  const session = await open(dial, ctx);
+  const session = await openSession(dial, ctx);
   await session.close().catch(() => {});
   return Date.now() - started;
 }
 
-async function open(
+export async function openSession(
   dial: BusDial,
   ctx: BusContext,
 ): Promise<InterfaceSession> {

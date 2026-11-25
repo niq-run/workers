@@ -42,6 +42,7 @@ import {
   type ResolvedDial,
 } from "./config.js";
 import { CliError, EXIT_OK, usageError } from "./errors.js";
+import { runMcpServer } from "./mcp.js";
 
 /** The package name, used in `--version` and error prefixes. */
 export const PACKAGE_NAME = "@niq.run/interface-worker";
@@ -77,6 +78,11 @@ export interface CliIO {
   err(text: string): void;
   /** Read all of stdin (used by `--data -` and `config import`). */
   readStdin(): Promise<string>;
+  /**
+   * Line-oriented stdin, for `mcp` (JSON-RPC is newline-delimited). Absent in
+   * contexts without a process stdin; `mcp` then refuses with a clear error.
+   */
+  stdinLines?(): AsyncIterable<string>;
 }
 
 /** Everything a command needs from the outside world. */
@@ -132,6 +138,8 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return await cmdConfig(rest, parsed.flags, ctx);
       case "skill":
         return await cmdSkill(rest, parsed.flags, ctx);
+      case "mcp":
+        return await cmdMcp(rest, parsed.flags, ctx);
       default:
         throw usageError(
           `unknown command: ${command} (run 'niq-interface help')`,
@@ -736,6 +744,53 @@ function expandHome(path: string): string {
   return path;
 }
 
+// ── mcp ──
+
+/**
+ * `mcp`: serve the worker over MCP on stdio.
+ *
+ * One-shot by default — each tool call dials the bus and disconnects, exactly
+ * like a CLI invocation. `--persistent` holds one session open and buffers
+ * inbound events, which is what makes request-then-poll workflows possible.
+ */
+async function cmdMcp(
+  rest: string[],
+  flags: ParsedArgs["flags"],
+  ctx: CliContext,
+): Promise<number> {
+  assertKnownFlags(flags, [...DIAL_FLAGS, "persistent", "inbox-size"]);
+  if (rest.length > 0) throw usageError(`unexpected argument: ${rest[0]}`);
+
+  const stdinLines = ctx.io.stdinLines;
+  if (!stdinLines) {
+    throw new CliError(
+      "mcp needs a line-oriented stdin: run the installed `niq-interface` binary",
+    );
+  }
+
+  const persistent = hasFlag(flags, "persistent");
+  // Persistent mode fixes the identity for the process lifetime, so resolve it
+  // once here: a missing/broken credential fails at startup, not on first use.
+  const dial = persistent ? resolveDialFor(flags, ctx) : undefined;
+  const inboxSize = parsePositiveInt(flag(flags, "inbox-size"), "inbox-size");
+
+  return runMcpServer(
+    {
+      mode: persistent ? "persistent" : "one-shot",
+      env: ctx.env,
+      version: version(),
+      ...(dial ? { dial } : {}),
+      ...(inboxSize !== undefined ? { inboxSize } : {}),
+      ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {}),
+    },
+    {
+      lines: stdinLines(),
+      write: (line) => ctx.io.out(line),
+      err: (line) => ctx.io.err(line),
+    },
+  );
+}
+
 // ── helpers ──
 
 function dialRequestFrom(flags: ParsedArgs["flags"]): DialRequest {
@@ -889,14 +944,22 @@ function parseTimeout(raw: string | undefined): number | undefined {
 }
 
 function parseMax(raw: string | undefined): number | undefined {
+  return parsePositiveInt(raw, "max");
+}
+
+/** A positive integer flag value, or undefined when absent. */
+function parsePositiveInt(
+  raw: string | undefined,
+  flagName: string,
+): number | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
-    throw usageError(`invalid --max "${raw}": expected a positive integer`);
+    throw usageError(`invalid --${flagName} "${raw}": expected a positive integer`);
   }
   const n = Number(trimmed);
   if (!Number.isSafeInteger(n) || n <= 0) {
-    throw usageError(`invalid --max "${raw}": expected a positive integer`);
+    throw usageError(`invalid --${flagName} "${raw}": expected a positive integer`);
   }
   return n;
 }
@@ -932,16 +995,18 @@ function commandHelp(name: string | undefined): string {
       return CONFIG_HELP;
     case "skill":
       return SKILL_HELP;
+    case "mcp":
+      return MCP_HELP;
     default:
       return ROOT_HELP;
   }
 }
 
-const ROOT_HELP = `niq-interface — the generic interface worker (CLI form) for a niq event bus
+const ROOT_HELP = `niq-interface — the generic interface worker for a niq event bus
 
-The bus sees an ordinary remote-worker identity. Each invocation dials as that
-identity, does one thing, and exits; long-lived forms (mcp / tui / serve) are
-planned behind the same binary.
+The bus sees an ordinary remote-worker identity. The CLI form dials, does one
+thing, and exits; \`mcp\` serves the same capabilities to an MCP client over
+stdio (one-shot per call, or --persistent with an inbox).
 
 Usage:
   niq-interface <command> [arguments] [options]
@@ -955,6 +1020,7 @@ Commands:
   info                    Show the resolved connection without dialling
   config <subcommand>     Manage bus credential sources
   skill <subcommand>      Print or install the companion agent skill
+  mcp                     Serve this worker over MCP on stdio
   help [command]          Show help for a command
 
 Dial options (every bus command):
@@ -1091,3 +1157,37 @@ Subcommands:
   print                   Print SKILL.md to stdout
   install                 Copy the skill into ~/.agents/skills/niq-interface
                           (--dest <dir> changes the root, --force overwrites)`;
+
+const MCP_HELP = `Usage: niq-interface mcp [--persistent] [options]
+
+Serve this worker to an MCP client over stdio (newline-delimited JSON-RPC).
+stdout carries the protocol only; diagnostics go to stderr.
+
+Modes:
+  (default)               One-shot: every tool call dials the bus, finishes and
+                          disconnects. No state, no inbox.
+  --persistent            Dial once at startup and hold the session. Events
+                          routed to this identity are buffered in memory, so
+                          niq_inbox can read them (cursor + short wait). This
+                          enables "send, then poll for the result".
+
+Tools:
+  niq_send                Directed event, fire-and-forget
+  niq_request             Directed request, waits for the correlated reply
+  niq_say                 worker.input {text, input_mode} to a reason worker
+  niq_status              Connection and inbox counters
+  niq_inbox               (persistent only) buffered events since a cursor
+
+Options:
+  --persistent            Hold one live session (see above)
+  --inbox-size <n>        Persistent buffer size in events (default 500)
+  --source <name>         Credential source pinned for the session
+                          (persistent mode; also the per-call default)
+  --config <path>         Credential file (default ~/.niq/interface.json)
+
+One identity = one live session: in persistent mode this server owns the
+identity, so a CLI command using the same source would replace its connection.
+
+MCP client config (e.g. Claude Code):
+  {"mcpServers":{"niq":{"command":"niq-interface",
+   "args":["mcp","--persistent","--source","laptop"]}}}`;
