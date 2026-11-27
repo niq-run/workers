@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_NAME_ENV,
   HELLO_GREET,
   HELLO_GREETED,
+  HELLO_SET_DEFAULT,
   HELLO_STATS,
   HelloWorker,
 } from "./worker.js";
@@ -296,5 +300,145 @@ describe("HelloWorker", () => {
     // The broadcast was rejected, but the reply still went out.
     const sends = published(publishes, "send");
     expect(sends[0].payload).toEqual({ result: "hello, ada!" });
+  });
+});
+
+describe("durable state", () => {
+  it("is memory-only when no state directory is offered", async () => {
+    const { fetchImpl, publishes } = fakeBus([{ type: HELLO_STATS, requestId: "s" }]);
+
+    const worker = makeWorker(fetchImpl);
+    expect(worker.persistence).toBe("");
+    await run(worker);
+
+    expect(published(publishes, "send")[0].payload).toMatchObject({
+      greeted: 0,
+      state_mode: "memory",
+    });
+    expect(published(publishes, "send")[0].payload).not.toHaveProperty("state_dir");
+  });
+
+  it("restores counters from the directory the caller passed in", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hello-state-"));
+
+    const first = fakeBus([
+      { type: HELLO_GREET, payload: { name: "ada" }, requestId: "1" },
+      { type: HELLO_GREET, payload: { name: "grace" }, requestId: "2" },
+    ]);
+    await run(makeWorker(first.fetchImpl, { stateDir: dir }));
+
+    // A fresh process (new worker, same directory) picks up where it left off.
+    const second = fakeBus([{ type: HELLO_STATS, requestId: "s" }]);
+    const restarted = makeWorker(second.fetchImpl, { stateDir: dir });
+    expect(restarted.persistence).toBe(dir);
+    await run(restarted);
+
+    expect(published(second.publishes, "send")[0].payload).toMatchObject({
+      greeted: 2,
+      names: ["ada", "grace"],
+      state_mode: "persisted",
+      state_dir: dir,
+    });
+  });
+
+  it("reads the directory from NIQ_STATE_DIR when no option is given", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hello-env-state-"));
+
+    const first = fakeBus([{ type: HELLO_GREET, payload: { name: "env" }, requestId: "1" }]);
+    await run(makeWorker(first.fetchImpl, { env: { NIQ_STATE_DIR: dir } }));
+
+    const second = fakeBus([{ type: HELLO_STATS, requestId: "s" }]);
+    await run(makeWorker(second.fetchImpl, { env: { NIQ_STATE_DIR: dir } }));
+
+    expect(published(second.publishes, "send")[0].payload).toMatchObject({
+      greeted: 1,
+      names: ["env"],
+    });
+  });
+
+  it("starts fresh, and says so, when the saved snapshot is unreadable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hello-bad-state-"));
+    await writeFile(join(dir, "state.json"), "{not json", "utf8");
+
+    const { fetchImpl, publishes } = fakeBus([{ type: HELLO_STATS, requestId: "s" }]);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await run(makeWorker(fetchImpl, { stateDir: dir }));
+      // Assert before restoring: mockRestore() also drops the call history.
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+
+    expect(published(publishes, "send")[0].payload).toMatchObject({ greeted: 0 });
+  });
+});
+
+describe("config patch", () => {
+  it("applies the new default name even with no writer, and reports it was not saved", async () => {
+    const { fetchImpl, publishes } = fakeBus([
+      { type: HELLO_SET_DEFAULT, payload: { name: "grace" }, requestId: "set" },
+      { type: HELLO_GREET, payload: {}, requestId: "greet" },
+    ]);
+
+    await run(makeWorker(fetchImpl));
+
+    const sends = published(publishes, "send");
+    const edit = sends.find((e) => e.request_id === "set");
+    expect(edit?.payload).toMatchObject({ default_name: "grace", persisted: false });
+    expect(String(edit?.payload.note)).toContain("this process only");
+    // The change is in effect immediately, regardless of persistence.
+    expect(sends.find((e) => e.request_id === "greet")?.payload).toEqual({
+      result: "hello, grace!",
+    });
+  });
+
+  it("forwards a merge patch to the injected writer and reports it was saved", async () => {
+    const { fetchImpl, publishes } = fakeBus([
+      { type: HELLO_SET_DEFAULT, payload: { name: "ada" }, requestId: "set" },
+    ]);
+    const patches: Record<string, unknown>[] = [];
+
+    await run(
+      makeWorker(fetchImpl, {
+        configPatcher: (patch) => {
+          patches.push(patch as Record<string, unknown>);
+        },
+      }),
+    );
+
+    expect(patches).toEqual([{ default_name: "ada" }]);
+    expect(published(publishes, "send")[0].payload).toMatchObject({
+      default_name: "ada",
+      persisted: true,
+    });
+  });
+
+  it("reports a writer failure instead of silently keeping the change", async () => {
+    const { fetchImpl, publishes } = fakeBus([
+      { type: HELLO_SET_DEFAULT, payload: { name: "ada" }, requestId: "set" },
+    ]);
+
+    await run(
+      makeWorker(fetchImpl, {
+        configPatcher: () => {
+          throw new Error("declaration store is read-only");
+        },
+      }),
+    );
+
+    const reply = published(publishes, "send")[0];
+    expect(reply.type).toBe("request.failed");
+    expect(JSON.stringify(reply.payload)).toContain("read-only");
+  });
+
+  it("rejects an empty name", async () => {
+    const { fetchImpl, publishes } = fakeBus([
+      { type: HELLO_SET_DEFAULT, payload: {}, requestId: "set" },
+    ]);
+
+    await run(makeWorker(fetchImpl));
+
+    expect(published(publishes, "send")[0].type).toBe("request.failed");
   });
 });

@@ -2,18 +2,21 @@
 
 **The reference example for writing a niq worker.** Start here.
 
-It is a complete, small worker — not a toy stub: it holds state, serves two
-capabilities (one replying with text, one with a structured object), declares a
-broadcast it emits, answers `worker.readme` / `worker.help`, layers flags over
-env with defaults, drains in-flight work on shutdown, and is tested against a
-fake bus. Every pattern you need for a real worker appears here once, in the
-order you will need it.
+It is a complete, small worker — not a toy stub: it holds state **and persists it
+when a directory is offered**, serves three capabilities (text reply, object
+reply, and a config edit), declares a broadcast it emits, answers `worker.readme`
+/ `worker.help`, layers flags over env with defaults, asks its composing layer to
+save config changes (`patchConfig`) and degrades honestly when there is none,
+drains in-flight work on shutdown, and is tested against a fake bus. Every
+pattern you need for a real worker appears here once, in the order you will need
+it.
 
 Built on [`@niq.run/worker-sdk`](https://www.npmjs.com/package/@niq.run/worker-sdk)
 — it has **no other runtime dependency**.
 
 ```sh
-npx @niq.run/hello-worker          # or: npm install -g @niq.run/hello-worker && niq-hello
+npx @niq.run/hello-worker                        # memory-only state
+npx @niq.run/hello-worker --state-dir ~/.hello   # counters survive restarts
 ```
 
 ---
@@ -64,6 +67,7 @@ Why three source files:
 
 ```ts
 async run(): Promise<void> {
+  await this.restoreState();                  // 0. load what survived restarts
   await this.base.channel.connect();          // 1. open the stream first
   await this.base.announceReady("hello", HELLO_PUBLISHES); // 2. presence
   for await (const evt of this.base.channel.events()) {    // 3. serve
@@ -72,13 +76,17 @@ async run(): Promise<void> {
 }
 
 async close(): Promise<void> {
-  await Promise.allSettled([...this.work]);   // 4. drain handlers
+  while (this.work.size > 0) {                // 4. drain until quiet
+    await Promise.allSettled([...this.work]);
+  }
   await this.base.channel.close();            // 5. close the stream
 }
 ```
 
 The order is not cosmetic:
 
+0. **Restore state before announcing.** The first `hello.stats` already reports
+   the counters that survived the last run.
 1. **Connect before announcing.** The bus only accepts publishes from an open
    session; a `worker.ready` sent too early is dropped.
 2. **Announce presence once.** `worker.ready` is how peers and the WebUI learn
@@ -89,7 +97,9 @@ The order is not cosmetic:
    remembered contract.
 4. **Drain on shutdown.** The dispatch loop does not await handlers (one slow
    handler must not stall the loop), so the worker tracks its handler promises
-   and awaits them in `close()`. Skip this and Ctrl-C can truncate a reply.
+   and awaits them in `close()`. Drain until the set is empty, not once: a
+   handler can start more work (this one persists state). Skip this and Ctrl-C
+   can truncate a reply or lose the last write.
 5. **Close last**, so nothing is published into a closed channel.
 
 ## 4. Capabilities: the extension registry
@@ -166,9 +176,16 @@ to the generic guide generated from the declared schema.
 Declare `publishes` only for your **own** domain events (`hello.greeted`).
 Universal protocol replies are implied.
 
-## 7. Config: flags > env > default
+## 7. Config and state
 
-Two layers, deliberately separate:
+Two things that look similar and are not. **Config** is build input: it is read
+when the worker starts, and a change takes effect on the *next* start. **State**
+is what the worker has accumulated: it is written while running and restored on
+the next start. Keep them apart and most persistence bugs disappear.
+
+### Config: flags > env > default
+
+Three layers, deliberately ordered:
 
 - **Bus connection** — `busConnFromArgs(opts)` layers `--bus-url` /
   `--worker-id` / `--credential` over the supervisor-injected
@@ -181,12 +198,64 @@ Two layers, deliberately separate:
 Keep the precedence consistent everywhere; an agent told "set the env var" must
 not be silently overridden by a stale flag.
 
+### Config at runtime: the worker asks, the owner writes
+
+A worker must not write its own declaration. `hello.set-default-name` calls
+`patchConfig`, which forwards a **merge patch** to a writer installed by whoever
+*composed* the worker:
+
+```ts
+this.defaultName = name;                      // in effect right away
+await this.base.patchConfig({ default_name: name });  // saved for next start
+```
+
+- **Merge, not replace.** Only the named keys change; `null` clears a key. A
+  worker repointing one field never clobbers the rest.
+- **Next start, not now.** Params are build input. Apply the change in memory so
+  the caller sees it immediately, and treat persistence as what survives a
+  restart.
+- **No writer is the normal case.** `@niq.run/worker-sdk` deliberately installs
+  none, and this worker does not go looking for a host worker to talk to — a
+  host worker is an ordinary worker that may be absent, and its tool surface is
+  not a stable contract. Without a writer the call throws
+  `ConfigUnavailableError`, and the worker applies the change for this process
+  and *says so* in its reply (`persisted: false`). That is the same degradation
+  a `niq` worker's `dial` performs.
+- **An embedder can inject one.** `new HelloWorker({ configPatcher })` is the
+  hook: the process that actually owns the declaration supplies the write.
+
+### State: the worker owns the bytes, the caller owns the location
+
+The counters are plain fields; what survives a restart is decided by whether a
+directory was offered:
+
+```ts
+const worker = new HelloWorker({ ... });            // memory only
+const worker = new HelloWorker({ stateDir: dir });  // persisted to <dir>/state.json
+```
+
+- **Off by default.** `--state-dir` (else `NIQ_STATE_DIR`) is opt-in; with
+  neither, the worker keeps counters in memory and a restart starts from zero.
+  The SDK never invents a location on disk.
+- **Atomic, and ordered by you.** The SDK's file store replaces the file
+  atomically (temp + rename), so a crash never leaves half a snapshot. Ordering
+  is the worker's job: this one chains its saves, so a slower older write can
+  never land last and roll the counters back. Do the same if you persist on
+  every handled event.
+- **Override for another backend.** `durableDir` / `setDurableStore` take any
+  `{ load, save }` store — a database row, a remote KV. `MemoryDurableStore` is
+  there for tests.
+- **Corruption is reported, not hidden.** `loadState` throws on invalid JSON;
+  this worker logs it and starts fresh, which is a deliberate choice rather than
+  a silent reset (see `restoreState`).
+
 | Purpose | Env | Flag | Default |
 |---|---|---|---|
 | Bus base URL | `NIQ_BUS_URL` | `--bus-url` | — |
 | Bus worker id | `NIQ_WORKER_ID` | `--worker-id` | — |
 | Bus credential | `NIQ_WORKER_CREDENTIAL` | `--credential` | — |
 | Name to greet | `HELLO_DEFAULT_NAME` | `--default-name` | `world` |
+| State directory | `NIQ_STATE_DIR` | `--state-dir` | memory only |
 
 ## 8. Testing without a bus
 
@@ -201,8 +270,15 @@ What to assert in a new worker:
 - the `worker.ready` payload: `type`, `watch` events and schemas, `publishes`,
   `exclude_worker_id`;
 - the `worker.readme` / `worker.help` answers;
+- **state across runs**: point two workers at one `stateDir` and assert the
+  second sees the first's counters — and that with no directory the reply says
+  `state_mode: "memory"`;
+- **config patches both ways**: with an injected `configPatcher` the patch is
+  forwarded and the reply says `persisted: true`; without one the reply says
+  `false` and the change still applies to this process;
 - the unhappy paths — a failed broadcast must not fail the caller (this example
-  makes the fake bus reject a publish to prove it).
+  makes the fake bus reject a publish to prove it), and an unreadable state file
+  starts fresh instead of crashing.
 
 ## 9. Packaging
 
@@ -283,7 +359,8 @@ today). Start from `hello` for a domain worker; start from `lark` for a bridge.
 | Event | Payload | Reply |
 |---|---|---|
 | `hello.greet` | `{ name?: string }` | text: `hello, <name \| default>!` |
-| `hello.stats` | `{}` | `{ greeted, names, uptime_ms, default_name }` |
+| `hello.stats` | `{}` | `{ greeted, names, uptime_ms, default_name, state_mode, state_dir }` |
+| `hello.set-default-name` | `{ name: string }` | `{ default_name, persisted, note }` |
 | `worker.readme` | `{}` | text: live usage guide |
 | `worker.help` | `{ event_name, params? }` | text: per-event guide |
 
@@ -302,6 +379,7 @@ today). Start from `hello` for a domain worker; start from `lark` for a bridge.
 niq-interface config import hello --from-file ./block.txt
 niq-interface request hello.greet --target <this-worker-id> -d '{"name":"ada"}'
 niq-interface request hello.stats --target <this-worker-id>
+niq-interface request hello.set-default-name --target <this-worker-id> -d '{"name":"grace"}'
 ```
 
 ## 14. Development

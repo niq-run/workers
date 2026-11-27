@@ -1,7 +1,7 @@
 {
   "name": "@niq.run/hello-worker",
-  "version": "0.2.0",
-  "description": "Reference niq worker — a complete, small example of the worker contract: state, text and object replies, a declared broadcast, worker.readme/worker.help, config layering, graceful shutdown and fake-bus tests. Built on @niq.run/worker-sdk.",
+  "version": "0.3.0",
+  "description": "Reference niq worker — a complete, small example of the worker contract: durable state, text and object replies, a declared broadcast, worker.readme/worker.help, config layering plus a runtime config patch, graceful shutdown and fake-bus tests. Built on @niq.run/worker-sdk.",
   "type": "module",
   "main": "./dist/worker.js",
   "types": "./dist/worker.d.ts",
@@ -29,7 +29,7 @@
     "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
   },
   "dependencies": {
-    "@niq.run/worker-sdk": "^0.10.0"
+    "@niq.run/worker-sdk": "^0.11.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

@@ -16,6 +16,8 @@
  *   runWorkerApp     run the body; on failure log and set exit code 1
  *
  * Config precedence in this worker is flags > env > default; see worker.ts.
+ * Durable state is opt-in: `--state-dir` (else NIQ_STATE_DIR), and neither
+ * means the counters live and die with the process.
  */
 import { busConnFromArgs, parseCliArgs, runWorkerApp } from "@niq.run/worker-sdk";
 import { DEFAULT_NAME_ENV, HelloWorker } from "./worker.js";
@@ -27,6 +29,7 @@ function usage(): void {
       "  --worker-id <id>       bus identity (else NIQ_WORKER_ID)\n" +
       "  --credential <cred>    bus credential (else NIQ_WORKER_CREDENTIAL)\n" +
       `  --default-name <name>  name used when a request carries none (else ${DEFAULT_NAME_ENV}; default: world)\n` +
+      "  --state-dir <dir>      keep counters across restarts (else NIQ_STATE_DIR; default: memory only)\n" +
       "  --help                 print this help",
   );
 }
@@ -44,12 +47,17 @@ await runWorkerApp(async () => {
     ...(opts["default-name"] !== undefined
       ? { defaultName: String(opts["default-name"]) }
       : {}),
+    ...(opts["state-dir"] !== undefined
+      ? { stateDir: String(opts["state-dir"]) }
+      : {}),
   });
 
   // Diagnostics go to stderr; stdout stays free for anything the worker might
   // print for a caller. Log only non-secret facts.
   console.error(
-    `[hello] ${worker.id} connecting to ${conn.baseURL} (serve hello.greet, hello.stats)`,
+    `[hello] ${worker.id} connecting to ${conn.baseURL} ` +
+      `(serves hello.greet, hello.stats, hello.set-default-name; state: ` +
+      `${worker.persistence ? `persisted in ${worker.persistence}` : "memory only"})`,
   );
 
   // Stop on Ctrl-C / SIGTERM instead of dying mid-handler. `close()` drains
